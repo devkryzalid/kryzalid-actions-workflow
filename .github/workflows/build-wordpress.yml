@@ -42,18 +42,46 @@ jobs:
     steps:
       - name: Validate required secrets for the branch
         run: |
+          echo "🚀 Validating secrets for branch '${{ inputs.branch }}'"
+
           if [ "${{ inputs.branch }}" = "dev" ]; then
-            if [ -z "${{ inputs.ssh_private_key_staging }}" ] || [ -z "${{ inputs.ssh_user_staging }}" ] || [ -z "${{ inputs.server_host_staging }}" ] || [ -z "${{ inputs.project_path_staging }}" ]; then
-              echo "❌ Missing required secrets for staging environment (branch 'dev')."
+            if [ -z "${{ inputs.ssh_private_key_staging }}" ]; then
+              echo "❌ Missing required secret: ssh_private_key_staging"
               exit 1
             fi
+            if [ -z "${{ inputs.ssh_user_staging }}" ]; then
+              echo "❌ Missing required secret: ssh_user_staging"
+              exit 1
+            fi
+            if [ -z "${{ inputs.server_host_staging }}" ]; then
+              echo "❌ Missing required secret: server_host_staging"
+              exit 1
+            fi
+            if [ -z "${{ inputs.project_path_staging }}" ]; then
+              echo "❌ Missing required secret: project_path_staging"
+              exit 1
+            fi
+            echo "✅ All required secrets for staging are present!"
           elif [ "${{ inputs.branch }}" = "main" ]; then
-            if [ -z "${{ inputs.ssh_private_key_prod }}" ] || [ -z "${{ inputs.ssh_user_prod }}" ] || [ -z "${{ inputs.server_host_prod }}" ] || [ -z "${{ inputs.project_path_prod }}" ]; then
-              echo "❌ Missing required secrets for production environment (branch 'main')."
+            if [ -z "${{ inputs.ssh_private_key_prod }}" ]; then
+              echo "❌ Missing required secret: ssh_private_key_prod"
               exit 1
             fi
+            if [ -z "${{ inputs.ssh_user_prod }}" ]; then
+              echo "❌ Missing required secret: ssh_user_prod"
+              exit 1
+            fi
+            if [ -z "${{ inputs.server_host_prod }}" ]; then
+              echo "❌ Missing required secret: server_host_prod"
+              exit 1
+            fi
+            if [ -z "${{ inputs.project_path_prod }}" ]; then
+              echo "❌ Missing required secret: project_path_prod"
+              exit 1
+            fi
+            echo "✅ All required secrets for production are present!"
           else
-            echo "❌ Invalid branch specified."
+            echo "❌ Invalid branch specified: '${{ inputs.branch }}'"
             exit 1
           fi
 
