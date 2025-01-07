@@ -37,6 +37,17 @@ on:
         required: true
 
 jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug inputs
+        run: |
+          echo "Branch: ${{ inputs.branch }}"
+          echo "SSH Private Key Staging: ${{ inputs.ssh_private_key_staging != '' }}"
+          echo "SSH User Staging: ${{ inputs.ssh_user_staging != '' }}"
+          echo "Server Host Staging: ${{ inputs.server_host_staging != '' }}"
+          echo "Project Path Staging: ${{ inputs.project_path_staging != '' }}"
+
   validate:
     runs-on: ubuntu-latest
     steps:
