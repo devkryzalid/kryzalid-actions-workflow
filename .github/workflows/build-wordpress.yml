@@ -40,16 +40,16 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate required variables
+      - name: Validate required secrets for the branch
         run: |
           if [ "${{ inputs.branch }}" = "dev" ]; then
             if [ -z "${{ inputs.ssh_private_key_staging }}" ] || [ -z "${{ inputs.ssh_user_staging }}" ] || [ -z "${{ inputs.server_host_staging }}" ] || [ -z "${{ inputs.project_path_staging }}" ]; then
-              echo "❌ Missing required staging inputs for branch 'dev'."
+              echo "❌ Missing required secrets for staging environment (branch 'dev')."
               exit 1
             fi
           elif [ "${{ inputs.branch }}" = "main" ]; then
             if [ -z "${{ inputs.ssh_private_key_prod }}" ] || [ -z "${{ inputs.ssh_user_prod }}" ] || [ -z "${{ inputs.server_host_prod }}" ] || [ -z "${{ inputs.project_path_prod }}" ]; then
-              echo "❌ Missing required production inputs for branch 'main'."
+              echo "❌ Missing required secrets for production environment (branch 'main')."
               exit 1
             fi
           else
