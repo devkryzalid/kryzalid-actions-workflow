@@ -10,43 +10,56 @@ on:
       ssh_private_key_staging:
         description: "SSH private key for staging"
         type: string
-        required: true
       ssh_private_key_prod:
         description: "SSH private key for production"
         type: string
-        required: true
       ssh_user_staging:
         description: "SSH user for staging"
         type: string
-        required: true
       ssh_user_prod:
         description: "SSH user for production"
         type: string
-        required: true
       server_host_staging:
         description: "Server host for staging"
         type: string
-        required: true
       server_host_prod:
         description: "Server host for production"
         type: string
-        required: true
       project_path_staging:
         description: "Project path for staging"
         type: string
-        required: true
       project_path_prod:
         description: "Project path for production"
         type: string
-        required: true
       slack_webhook_url:
         description: "Slack Webhook URL"
         type: string
         required: true
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate required variables
+        run: |
+          if [ "${{ inputs.branch }}" = "dev" ]; then
+            if [ -z "${{ inputs.ssh_private_key_staging }}" ] || [ -z "${{ inputs.ssh_user_staging }}" ] || [ -z "${{ inputs.server_host_staging }}" ] || [ -z "${{ inputs.project_path_staging }}" ]; then
+              echo "❌ Missing required staging inputs for branch 'dev'."
+              exit 1
+            fi
+          elif [ "${{ inputs.branch }}" = "main" ]; then
+            if [ -z "${{ inputs.ssh_private_key_prod }}" ] || [ -z "${{ inputs.ssh_user_prod }}" ] || [ -z "${{ inputs.server_host_prod }}" ] || [ -z "${{ inputs.project_path_prod }}" ]; then
+              echo "❌ Missing required production inputs for branch 'main'."
+              exit 1
+            fi
+          else
+            echo "❌ Invalid branch specified."
+            exit 1
+          fi
+
   build:
     runs-on: ubuntu-latest
+    needs: validate
     steps:
       - name: Set environment variables
         id: env
