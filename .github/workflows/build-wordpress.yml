@@ -107,53 +107,54 @@ jobs:
           with:
             payload: |
               {
-                "text": "Notification de déploiement",
+                "text": "🚀 Déploiement réussi sur l'environnement staging.",
                 "blocks": [
                   {
-                    "type": "section",
+                    "type": "header",
                     "text": {
-                      "type": "mrkdwn",
-                      "text": "*🚀 Notification de déploiement !*\nVoici les détails de l'opération."
+                      "type": "plain_text",
+                      "text": "✅ Déploiement réussi",
+                      "emoji": true
                     }
-                  },
-                  {
-                    "type": "divider"
                   },
                   {
                     "type": "section",
                     "fields": [
                       {
                         "type": "mrkdwn",
-                        "text": "*Projet :*\n${{ github.repository }}"
+                        "text": "*Projet:*\ndevkryzalid/douglas"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Environnement :*\n${{ inputs.environment }}"
+                        "text": "*Environnement:*\nstaging"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Status :*\n${{ needs.build.result == 'success' && '✅ Succès' || '❌ Échec' }}"
+                        "text": "*Branche:*\n`dev`"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Branche :*\n`${{ github.ref_name }}`"
+                        "text": "*Auteur:*\nThomas CLOAREC"
                       }
                     ]
                   },
                   {
                     "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Message du commit:*\n💚 Update with global CI"
+                    }
+                  },
+                  {
+                    "type": "section",
                     "fields": [
                       {
                         "type": "mrkdwn",
-                        "text": "*Auteur :*\n${{ github.event.head_commit.author.name }}"
+                        "text": "*Date:*\n2025-01-16 19:52:33 UTC"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Date :*\n${{ env.CURRENT_TIME }}"
-                      },
-                      {
-                        "type": "mrkdwn",
-                        "text": "*Message :*\n${{ env.clean_commit_message }}"
+                        "text": "*Status:*\nsuccess"
                       }
                     ]
                   },
@@ -164,33 +165,31 @@ jobs:
                         "type": "button",
                         "text": {
                           "type": "plain_text",
-                          "text": "📝 Voir le commit",
+                          "text": "Voir le commit",
                           "emoji": true
                         },
-                        "url": "${{ github.event.head_commit.url }}"
+                        "url": "https://github.com/devkryzalid/douglas/commit/ad54d0b53741ec869f2c98c01888f841b2c70dea"
                       },
                       {
                         "type": "button",
                         "text": {
                           "type": "plain_text",
-                          "text": "🔍 Voir l'action",
+                          "text": "Voir l'action",
                           "emoji": true
                         },
-                        "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                        "url": "https://github.com/devkryzalid/douglas/actions/runs/12816318493"
                       }
                     ]
+                  },
+                  {
+                    "type": "divider"
                   },
                   {
                     "type": "context",
                     "elements": [
                       {
-                        "type": "image",
-                        "image_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-                        "alt_text": "GitHub"
-                      },
-                      {
                         "type": "mrkdwn",
-                        "text": "Déployé via GitHub Actions • Run ID: `${{ github.run_id }}`"
+                        "text": "Déployé via GitHub Actions • Run ID: `12816318493`"
                       }
                     ]
                   }
