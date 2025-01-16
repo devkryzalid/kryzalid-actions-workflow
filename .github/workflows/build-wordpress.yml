@@ -1,113 +1,70 @@
-name: Build WordPress Project
+# .github/workflows/wordpress-template.yml
+name: Reusable WordPress Workflow
 
 on:
   workflow_call:
     inputs:
-      branch:
-        description: "Branch name (dev for staging, main for production)"
-        type: string
+      environment:
+        description: 'Target environment (staging or production)'
         required: true
-      ssh_private_key_staging:
-        description: "SSH private key for staging"
         type: string
-      ssh_private_key_prod:
-        description: "SSH private key for production"
-        type: string
-      ssh_user_staging:
-        description: "SSH user for staging"
-        type: string
-      ssh_user_prod:
-        description: "SSH user for production"
-        type: string
-      server_host_staging:
-        description: "Server host for staging"
-        type: string
-      server_host_prod:
-        description: "Server host for production"
-        type: string
-      project_path_staging:
-        description: "Project path for staging"
-        type: string
-      project_path_prod:
-        description: "Project path for production"
-        type: string
-      slack_webhook_url:
-        description: "Slack Webhook URL"
-        type: string
+    secrets:
+      # Staging secrets
+      SSH_PRIVATE_KEY_STAGING:
+        required: false
+      SSH_USER_STAGING:
+        required: false
+      SERVER_HOST_STAGING:
+        required: false
+      PROJECT_PATH_STAGING:
+        required: false
+      # Production secrets
+      SSH_PRIVATE_KEY_PROD:
+        required: false
+      SSH_USER_PROD:
+        required: false
+      SERVER_HOST_PROD:
+        required: false
+      PROJECT_PATH_PROD:
+        required: false
+      # Common secrets
+      SLACK_WEBHOOK_URL:
         required: true
 
 jobs:
-  debug:
+  validate-secrets:
     runs-on: ubuntu-latest
     steps:
-      - name: Debug inputs
+      - name: Check required secrets
         run: |
-          echo "Branch: ${{ inputs.branch }}"
-          echo "SSH Private Key Staging: ${{ inputs.ssh_private_key_staging != '' }}"
-          echo "SSH User Staging: ${{ inputs.ssh_user_staging != '' }}"
-          echo "Server Host Staging: ${{ inputs.server_host_staging != '' }}"
-          echo "Project Path Staging: ${{ inputs.project_path_staging != '' }}"
-
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate required secrets for the branch
-        run: |
-          echo "🚀 Validating secrets for branch '${{ inputs.branch }}'"
-
-          if [ "${{ inputs.branch }}" = "dev" ]; then
-            if [ -z "${{ inputs.ssh_private_key_staging }}" ]; then
-              echo "❌ Missing required secret: ssh_private_key_staging"
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
+               [ -z "${{ secrets.SSH_USER_STAGING }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_STAGING }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_STAGING }}" ]; then
+              echo "Missing required staging secrets"
               exit 1
             fi
-            if [ -z "${{ inputs.ssh_user_staging }}" ]; then
-              echo "❌ Missing required secret: ssh_user_staging"
-              exit 1
-            fi
-            if [ -z "${{ inputs.server_host_staging }}" ]; then
-              echo "❌ Missing required secret: server_host_staging"
-              exit 1
-            fi
-            if [ -z "${{ inputs.project_path_staging }}" ]; then
-              echo "❌ Missing required secret: project_path_staging"
-              exit 1
-            fi
-            echo "✅ All required secrets for staging are present!"
-          elif [ "${{ inputs.branch }}" = "main" ]; then
-            if [ -z "${{ inputs.ssh_private_key_prod }}" ]; then
-              echo "❌ Missing required secret: ssh_private_key_prod"
-              exit 1
-            fi
-            if [ -z "${{ inputs.ssh_user_prod }}" ]; then
-              echo "❌ Missing required secret: ssh_user_prod"
-              exit 1
-            fi
-            if [ -z "${{ inputs.server_host_prod }}" ]; then
-              echo "❌ Missing required secret: server_host_prod"
-              exit 1
-            fi
-            if [ -z "${{ inputs.project_path_prod }}" ]; then
-              echo "❌ Missing required secret: project_path_prod"
-              exit 1
-            fi
-            echo "✅ All required secrets for production are present!"
           else
-            echo "❌ Invalid branch specified: '${{ inputs.branch }}'"
-            exit 1
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_PROD }}" ] || \
+               [ -z "${{ secrets.SSH_USER_PROD }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_PROD }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_PROD }}" ]; then
+              echo "Missing required production secrets"
+              exit 1
+            fi
           fi
 
   build:
+    needs: validate-secrets
     runs-on: ubuntu-latest
-    needs: validate
     steps:
       - name: Set environment variables
         id: env
         run: |
-          if [ "${{ inputs.branch }}" = "dev" ]; then
-            echo "environment=staging" >> $GITHUB_OUTPUT
+          if [ "${{ inputs.environment }}" = "staging" ]; then
             echo "build_command=dev" >> $GITHUB_OUTPUT
-          else
-            echo "environment=production" >> $GITHUB_OUTPUT
+          else 
             echo "build_command=build" >> $GITHUB_OUTPUT
           fi
 
@@ -117,33 +74,37 @@ jobs:
       - name: Set up SSH key
         uses: webfactory/ssh-agent@v0.5.3
         with:
-          ssh-private-key: ${{ inputs.branch == 'dev' && inputs.ssh_private_key_staging || inputs.ssh_private_key_prod }}
+          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Deploy and build
         env:
-          SSH_USER: ${{ inputs.branch == 'dev' && inputs.ssh_user_staging || inputs.ssh_user_prod }}
-          SERVER_HOST: ${{ inputs.branch == 'dev' && inputs.server_host_staging || inputs.server_host_prod }}
-          PROJECT_PATH: ${{ inputs.branch == 'dev' && inputs.project_path_staging || inputs.project_path_prod }}
+          SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+          PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
             cd $PROJECT_PATH && \
             git pull && \
-            if git diff --name-only HEAD HEAD~1 | grep -q 'package.json'; then \
-              npm ci; \
-            fi && \
+            npm ci && \
             npm run ${{ steps.env.outputs.build_command }}"
 
   notify:
-    needs: build
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Send notification to Slack
-        uses: slackapi/slack-github-action@v1.24.0
-        with:
-          payload: |
-            {
-              "text": "${{ needs.build.result == 'success' && '✅' || '❌' }} Build ${{ needs.build.result }} for *${{ inputs.branch == 'dev' && 'staging' || 'production' }}* environment\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ inputs.branch }}\n*Commit:* ${{ github.event.head_commit.message }}\n*Author:* ${{ github.event.head_commit.author.name }}"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
+      needs: build
+      runs-on: ubuntu-latest
+      if: always()
+      steps:
+        - name: Clean commit message
+          id: clean_message
+          run: |
+            CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
+            echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+
+        - name: Send notification to Slack
+          uses: slackapi/slack-github-action@v1.24.0
+          with:
+            payload: |
+              {
+                "text": "${{ needs.build.result == 'success' && '✅' || '❌' }} Build ${{ needs.build.result }} for *${{ inputs.environment }}* environment\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ env.clean_commit_message }}\n*Author:* ${{ github.event.head_commit.author.name }}"
+              }
+          env:
+            SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
