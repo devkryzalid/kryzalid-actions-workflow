@@ -88,112 +88,112 @@ jobs:
             npm ci && \
             npm run ${{ steps.env.outputs.build_command }}"
 
-notify:
-  needs: build
-  runs-on: ubuntu-latest
-  if: always()
-  steps:
-    - name: Clean commit message
-      id: clean_message
-      run: |
-        CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
-        echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+  notify:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Clean commit message
+        id: clean_message
+        run: |
+          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
+          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
 
-    - name: Get current time
-      run: echo "CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S %Z')" >> $GITHUB_ENV
+      - name: Get current time
+        run: echo "CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S %Z')" >> $GITHUB_ENV
 
-    - name: Send notification to Slack
-      uses: slackapi/slack-github-action@v1.24.0
-      with:
-        payload: |
-          {
-            "text": "${{ needs.build.result == 'success' && '✅' || '❌' }} Build ${{ needs.build.result }} for *${{ github.ref_name == 'dev' && 'staging' || 'production' }}* environment",
-            "blocks": [
-              {
-                "type": "header",
-                "text": {
-                  "type": "plain_text",
-                  "text": "${{ needs.build.result == 'success' && '✅ Déploiement réussi' || '❌ Déploiement échoué' }}",
-                  "emoji": true
-                }
-              },
-              {
-                "type": "section",
-                "fields": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Projet:*\n${{ github.repository }}"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Environnement:*\n${{ github.ref_name == 'dev' && 'staging' || 'production' }}"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Branche:*\n`${{ github.ref_name }} `"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Auteur:*\n${{ github.event.head_commit.author.name }}"
+      - name: Send notification to Slack
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "${{ needs.build.result == 'success' && '✅' || '❌' }} Build ${{ needs.build.result }} for *${{ github.ref_name == 'dev' && 'staging' || 'production' }}* environment",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ needs.build.result == 'success' && '✅ Déploiement réussi' || '❌ Déploiement échoué' }}",
+                    "emoji": true
                   }
-                ]
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "*Message du commit:*\n`${{ env.clean_commit_message }} `"
-                }
-              },
-              {
-                "type": "section",
-                "fields": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Date:*\n`${{ env.CURRENT_TIME }} `"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Status:*\n${{ needs.build.result }}"
-                  }
-                ]
-              },
-              {
-                "type": "actions",
-                "elements": [
-                  {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "Voir le commit",
-                      "emoji": true
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Projet:*\n${{ github.repository }}"
                     },
-                    "url": "https://github.com/${{ github.repository }}/commit/${{ github.event.head_commit.id }}"
-                  },
-                  {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "Voir les détails",
-                      "emoji": true
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environnement:*\n${{ github.ref_name == 'dev' && 'staging' || 'production' }}"
                     },
-                    "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                  }
-                ]
-              },
-              {
-                "type": "divider"
-              },
-              {
-                "type": "context",
-                "elements": [
-                  {
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branche:*\n`${{ github.ref_name }} `"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Auteur:*\n${{ github.event.head_commit.author.name }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
                     "type": "mrkdwn",
-                    "text": "Déployé via GitHub Actions • Run ID: `${{ github.run_id }}`"
+                    "text": "*Message du commit:*\n`${{ env.clean_commit_message }} `"
                   }
-                ]
-              }
-            ]
-          }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Date:*\n`${{ env.CURRENT_TIME }} `"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:*\n${{ needs.build.result }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Voir le commit",
+                        "emoji": true
+                      },
+                      "url": "https://github.com/${{ github.repository }}/commit/${{ github.event.head_commit.id }}"
+                    },
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Voir les détails",
+                        "emoji": true
+                      },
+                      "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "divider"
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "Déployé via GitHub Actions • Run ID: `${{ github.run_id }}`"
+                    }
+                  ]
+                }
+              ]
+            }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
