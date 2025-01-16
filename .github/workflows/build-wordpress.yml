@@ -107,13 +107,13 @@ jobs:
           with:
             payload: |
               {
+                "text": "${{ needs.build.result == 'success' && '✅ Déploiement réussi' || '❌ Échec du déploiement' }} - ${{ github.repository }} (${{ inputs.environment }})",
                 "blocks": [
                   {
                     "type": "header",
                     "text": {
                       "type": "plain_text",
-                      "text": "${{ needs.build.result == 'success' && '✅ Déploiement réussi' || '❌ Échec du déploiement' }}",
-                      "emoji": true
+                      "text": "${{ needs.build.result == 'success' && '✅ Déploiement réussi' || '❌ Échec du déploiement' }}"
                     }
                   },
                   {
@@ -164,8 +164,7 @@ jobs:
                         "type": "button",
                         "text": {
                           "type": "plain_text",
-                          "text": "Voir le commit",
-                          "emoji": true
+                          "text": "Voir le commit"
                         },
                         "url": "${{ github.event.head_commit.url }}"
                       },
@@ -173,8 +172,7 @@ jobs:
                         "type": "button",
                         "text": {
                           "type": "plain_text",
-                          "text": "Voir l'action",
-                          "emoji": true
+                          "text": "Voir l'action"
                         },
                         "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                       }
