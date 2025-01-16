@@ -99,100 +99,12 @@ jobs:
           CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
           echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
 
-      - name: Get current time
-        run: echo "CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S %Z')" >> $GITHUB_ENV
-
       - name: Send notification to Slack
         uses: slackapi/slack-github-action@v1.24.0
         with:
           payload: |
             {
-              "text": "${{ needs.build.result == 'success' && '✅' || '❌' }} Build ${{ needs.build.result }} for *${{ github.ref_name == 'dev' && 'staging' || 'production' }}* environment",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "${{ needs.build.result == 'success' && '✅ *Déploiement réussi*' || '❌ *Déploiement échoué*' }}"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*<https://github.com/${{ github.repository }}|${{ github.repository }}>*\nEnvironnement: *${{ github.ref_name == 'dev' && 'staging' || 'production' }}*\nBranche: `${{ github.ref_name }}`"
-                  },
-                  "accessory": {
-                    "type": "image",
-                    "image_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-                    "alt_text": "GitHub Logo"
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Auteur:*\n${{ github.event.head_commit.author.name }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Status:*\n${{ needs.build.result == 'success' && '✅ Succès' || '❌ Échec' }}"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Message du commit:*\n```${{ env.clean_commit_message }}```"
-                  }
-                },
-                {
-                  "type": "context",
-                  "elements": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "📅 Déployé le `${{ env.CURRENT_TIME }}`"
-                    }
-                  ]
-                },
-                {
-                  "type": "actions",
-                  "elements": [
-                    {
-                      "type": "button",
-                      "text": {
-                        "type": "plain_text",
-                        "text": "📝 Voir le commit",
-                        "emoji": true
-                      },
-                      "url": "https://github.com/${{ github.repository }}/commit/${{ github.event.head_commit.id }}"
-                    },
-                    {
-                      "type": "button",
-                      "text": {
-                        "type": "plain_text",
-                        "text": "🔍 Voir les détails",
-                        "emoji": true
-                      },
-                      "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                    }
-                  ]
-                },
-                {
-                  "type": "divider"
-                },
-                {
-                  "type": "context",
-                  "elements": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "🤖 Déployé via GitHub Actions • Run ID: `${{ github.run_id }}`"
-                    }
-                  ]
-                }
-              ]
+              "text": "*${{ needs.build.result == 'success' && '✅ Build Success' || '❌ Build Failed' }}*\n\n*Environment Details:*\n• Environment: *${{ github.ref_name == 'dev' && 'Staging' || 'Production' }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n• SHA: ${{ github.sha }}\n\n*Workflow Details:*\n• Workflow: ${{ github.workflow }}\n• Run ID: ${{ github.run_id }}\n• Run Number: ${{ github.run_number }}\n• Triggered by: ${{ github.event_name }}\n\n*Build Details:*\n• Duration: ${{ needs.build.duration }}\n• Started: ${{ needs.build.started_at }}\n• Completed: ${{ needs.build.completed_at }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
