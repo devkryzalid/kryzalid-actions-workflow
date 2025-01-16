@@ -110,11 +110,22 @@ jobs:
               "text": "${{ needs.build.result == 'success' && '✅' || '❌' }} Build ${{ needs.build.result }} for *${{ github.ref_name == 'dev' && 'staging' || 'production' }}* environment",
               "blocks": [
                 {
-                  "type": "header",
+                  "type": "section",
                   "text": {
-                    "type": "plain_text",
-                    "text": "${{ needs.build.result == 'success' && '✅ Déploiement réussi' || '❌ Déploiement échoué' }}",
-                    "emoji": true
+                    "type": "mrkdwn",
+                    "text": "${{ needs.build.result == 'success' && '✅ *Déploiement réussi*' || '❌ *Déploiement échoué*' }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*<https://github.com/${{ github.repository }}|${{ github.repository }}>*\nEnvironnement: *${{ github.ref_name == 'dev' && 'staging' || 'production' }}*\nBranche: `${{ github.ref_name }}`"
+                  },
+                  "accessory": {
+                    "type": "image",
+                    "image_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                    "alt_text": "GitHub Logo"
                   }
                 },
                 {
@@ -122,19 +133,11 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Projet:*\n${{ github.repository }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Environnement:*\n${{ github.ref_name == 'dev' && 'staging' || 'production' }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Branche:*\n`${{ github.ref_name }} `"
-                    },
-                    {
-                      "type": "mrkdwn",
                       "text": "*Auteur:*\n${{ github.event.head_commit.author.name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:*\n${{ needs.build.result == 'success' && '✅ Succès' || '❌ Échec' }}"
                     }
                   ]
                 },
@@ -142,19 +145,15 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Message du commit:*\n`${{ env.clean_commit_message }} `"
+                    "text": "*Message du commit:*\n```${{ env.clean_commit_message }}```"
                   }
                 },
                 {
-                  "type": "section",
-                  "fields": [
+                  "type": "context",
+                  "elements": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Date:*\n`${{ env.CURRENT_TIME }} `"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Status:*\n${{ needs.build.result }}"
+                      "text": "📅 Déployé le `${{ env.CURRENT_TIME }}`"
                     }
                   ]
                 },
@@ -165,7 +164,7 @@ jobs:
                       "type": "button",
                       "text": {
                         "type": "plain_text",
-                        "text": "Voir le commit",
+                        "text": "📝 Voir le commit",
                         "emoji": true
                       },
                       "url": "https://github.com/${{ github.repository }}/commit/${{ github.event.head_commit.id }}"
@@ -174,7 +173,7 @@ jobs:
                       "type": "button",
                       "text": {
                         "type": "plain_text",
-                        "text": "Voir les détails",
+                        "text": "🔍 Voir les détails",
                         "emoji": true
                       },
                       "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -189,7 +188,7 @@ jobs:
                   "elements": [
                     {
                       "type": "mrkdwn",
-                      "text": "Déployé via GitHub Actions • Run ID: `${{ github.run_id }}`"
+                      "text": "🤖 Déployé via GitHub Actions • Run ID: `${{ github.run_id }}`"
                     }
                   ]
                 }
