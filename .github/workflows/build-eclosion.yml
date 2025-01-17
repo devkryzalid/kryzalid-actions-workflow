@@ -71,7 +71,7 @@ jobs:
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
-      - name: Pull latest changes and build
+      - name: Build application
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -85,14 +85,25 @@ jobs:
             node_modules/@angular/cli/bin/ng.js build --configuration production && \
             mkdir -p dist public www && \
             cp public/.htaccess dist/ && \
-            cp www/sitemap.xml dist/ && \
-            cp public/robots.txt dist/"
+            cp public/robots.txt dist/ && \
+            if [ \"$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then \
+              cp www/sitemap.xml dist/ \
+            fi"
 
           if [ "${{ inputs.environment }}" = "production" ]; then
             ssh $SSH_USER@$SERVER_HOST "echo '⚠️ Remember to verify robots.txt configuration for production environment'"
           fi
 
-      - name: Deploy
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Deploy to server
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -101,7 +112,9 @@ jobs:
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
             cd $PROJECT_PATH && \
             mkdir -p www dist && \
-            cp www/sitemap.xml dist/ && \
+            if [ \"$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then \
+              cp www/sitemap.xml dist/ \
+            fi && \
             rm -rf wwwbkp && \
             mv www wwwbkp && \
             mv dist www"
