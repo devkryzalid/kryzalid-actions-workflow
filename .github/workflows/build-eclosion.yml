@@ -126,23 +126,23 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -l -c 'cd $PROJECT_PATH && mkdir -p www dist && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi && rm -rf wwwbkp && mv www wwwbkp && mv dist www'"
 
-  # notify:
-  #   needs: build
-  #   runs-on: ubuntu-latest
-  #   if: always()
-  #   steps:
-  #     - name: Clean commit message
-  #       id: clean_message
-  #       run: |
-  #         CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
-  #         echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+  notify:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Clean commit message
+        id: clean_message
+        run: |
+          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
+          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
 
-  #     - name: Send notification to Slack
-  #       uses: slackapi/slack-github-action@v1.24.0
-  #       with:
-  #         payload: |
-  #           {
-  #             "text": "*${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
-  #           }
-  #       env:
-  #         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Send notification to Slack
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "ECLOSION - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
