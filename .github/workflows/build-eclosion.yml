@@ -76,19 +76,21 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
-      - name: Set locale
+      - name: Set locale and environment
         run: |
           sudo locale-gen en_US.UTF-8
-          export LANG=en_US.UTF-8
-          export LC_ALL=en_US.UTF-8
+          echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
+          echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
 
       - name: Build application
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "bash -l -c '\
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -l -c '\
             mkdir -p $PROJECT_PATH && \
             cd $PROJECT_PATH && \
             git pull && \
@@ -119,19 +121,21 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
-      - name: Set locale
+      - name: Set locale and environment
         run: |
           sudo locale-gen en_US.UTF-8
-          export LANG=en_US.UTF-8
-          export LC_ALL=en_US.UTF-8
+          echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
+          echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
 
       - name: Deploy to server
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "bash -l -c '\
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -l -c '\
             cd $PROJECT_PATH && \
             mkdir -p www dist && \
             if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then \
