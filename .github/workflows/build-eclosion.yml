@@ -71,13 +71,24 @@ jobs:
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
+      - name: Configure SSH known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
+
+      - name: Set locale
+        run: |
+          sudo locale-gen en_US.UTF-8
+          export LANG=en_US.UTF-8
+          export LC_ALL=en_US.UTF-8
+
       - name: Build application
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "bash -l -c '\
             mkdir -p $PROJECT_PATH && \
             cd $PROJECT_PATH && \
             git pull && \
@@ -86,9 +97,9 @@ jobs:
             mkdir -p dist public www && \
             cp public/.htaccess dist/ && \
             cp public/robots.txt dist/ && \
-            if [ \"$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then \
+            if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then \
               cp www/sitemap.xml dist/ \
-            fi"
+            fi'"
 
           if [ "${{ inputs.environment }}" = "production" ]; then
             ssh $SSH_USER@$SERVER_HOST "echo '⚠️ Remember to verify robots.txt configuration for production environment'"
@@ -103,21 +114,32 @@ jobs:
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
+      - name: Configure SSH known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
+
+      - name: Set locale
+        run: |
+          sudo locale-gen en_US.UTF-8
+          export LANG=en_US.UTF-8
+          export LC_ALL=en_US.UTF-8
+
       - name: Deploy to server
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "bash -l -c '\
             cd $PROJECT_PATH && \
             mkdir -p www dist && \
-            if [ \"$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then \
+            if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then \
               cp www/sitemap.xml dist/ \
             fi && \
             rm -rf wwwbkp && \
             mv www wwwbkp && \
-            mv dist www"
+            mv dist www'"
 
   # notify:
   #   needs: build
