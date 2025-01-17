@@ -78,10 +78,12 @@ jobs:
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
+            mkdir -p $PROJECT_PATH && \
             cd $PROJECT_PATH && \
             git pull && \
             npm ci && \
             node_modules/@angular/cli/bin/ng.js build --configuration production && \
+            mkdir -p dist public www && \
             cp public/.htaccess dist/ && \
             cp www/sitemap.xml dist/ && \
             cp public/robots.txt dist/"
@@ -98,6 +100,7 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
             cd $PROJECT_PATH && \
+            mkdir -p www dist && \
             cp www/sitemap.xml dist/ && \
             rm -rf wwwbkp && \
             mv www wwwbkp && \
