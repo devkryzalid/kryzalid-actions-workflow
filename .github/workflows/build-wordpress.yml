@@ -85,7 +85,7 @@ jobs:
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
             cd $PROJECT_PATH && \
             git pull && \
-            npm ci || npm ci --legacy-peers || npm ci --force && \
+            if [ ! -d "node_modules" ] || [ -n "$(git diff HEAD^ HEAD -- package.json)" ]; then npm ci; fi && \
             npm run ${{ steps.env.outputs.build_command }}"
 
   notify:
