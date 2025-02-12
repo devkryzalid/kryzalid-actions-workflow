@@ -86,6 +86,7 @@ jobs:
             cd $PROJECT_PATH && \
             git pull && \
             composer install && \
+            php artisan migrate && \
             npm run build"
 
   notify:
