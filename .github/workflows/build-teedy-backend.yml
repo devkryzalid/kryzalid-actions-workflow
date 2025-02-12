@@ -1,0 +1,110 @@
+# .github/workflows/wordpress-template.yml
+name: Reusable WordPress Workflow
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (staging or production)'
+        required: true
+        type: string
+    secrets:
+      # Staging secrets
+      SSH_PRIVATE_KEY_STAGING:
+        required: false
+      SSH_USER_STAGING:
+        required: false
+      SERVER_HOST_STAGING:
+        required: false
+      PROJECT_PATH_STAGING:
+        required: false
+      # Production secrets
+      SSH_PRIVATE_KEY_PROD:
+        required: false
+      SSH_USER_PROD:
+        required: false
+      SERVER_HOST_PROD:
+        required: false
+      PROJECT_PATH_PROD:
+        required: false
+      # Common secrets
+      SLACK_WEBHOOK_URL:
+        required: true
+
+jobs:
+  validate-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required secrets
+        run: |
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
+               [ -z "${{ secrets.SSH_USER_STAGING }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_STAGING }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_STAGING }}" ]; then
+              echo "Missing required staging secrets"
+              exit 1
+            fi
+          else
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_PROD }}" ] || \
+               [ -z "${{ secrets.SSH_USER_PROD }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_PROD }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_PROD }}" ]; then
+              echo "Missing required production secrets"
+              exit 1
+            fi
+          fi
+
+  build:
+    needs: validate-secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set environment variables
+        id: env
+        run: |
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            echo "build_command=dev" >> $GITHUB_OUTPUT
+          else 
+            echo "build_command=build" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Deploy and build
+        env:
+          SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+          PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
+            cd $PROJECT_PATH && \
+            git pull && \
+            composer install && \
+            npm run build"
+
+  notify:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Clean commit message
+        id: clean_message
+        run: |
+          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
+          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+
+      - name: Send notification to Slack
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "Teedy back-end - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
