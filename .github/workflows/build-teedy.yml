@@ -90,7 +90,7 @@ jobs:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -l -c 'mkdir -p $PROJECT_PATH && cd $PROJECT_PATH && git pull && npm ci && npm run build:prod'"
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -l -c 'mkdir -p $PROJECT_PATH && cd $PROJECT_PATH && git pull && npm ci && if [ \"${{ inputs.environment }}\" = \"staging\" ]; then npm run build; else npm run build:prod; fi'"
 
           if [ "${{ inputs.environment }}" = "production" ]; then
             ssh $SSH_USER@$SERVER_HOST "echo '⚠️ Remember to verify robots.txt configuration for production environment'"
