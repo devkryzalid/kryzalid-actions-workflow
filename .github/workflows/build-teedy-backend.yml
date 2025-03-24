@@ -84,9 +84,7 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
             cd $PROJECT_PATH && \
-            git pull && \
-            php artisan migrate && \
-            npm run build"
+            git pull"
 
   notify:
     needs: build
