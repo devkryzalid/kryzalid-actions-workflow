@@ -77,16 +77,17 @@ jobs:
             git pull && \
             # Installer les dépendances si nécessaire
             if [ ! -d 'node_modules' ] || [ -n \"$(git diff HEAD^ HEAD -- package.json)\" ]; then npm ci; fi && \
-            # Créer le fichier .env pour le serveur Node.js
-            echo 'NODE_ENV=${{ inputs.environment == 'staging' && 'development' || 'production' }}' > .env && \
-            echo 'PORT=3000' >> .env && \
-            echo 'CACHE_DURATION=300000' >> .env && \
-            # Construire l'application Vue.js
+            # Créer le fichier .env.server pour le serveur Node.js uniquement
+            echo 'SERVER_ENV=${{ inputs.environment }}' > .env.server && \
+            echo 'PORT=3000' >> .env.server && \
+            echo 'CACHE_DURATION=300000' >> .env.server && \
+            # Construire l'application Vue.js avec le mode approprié
             npm run build && \
             # Arrêter le serveur Node.js s'il est en cours d'exécution
             pm2 stop kryzahub-server || true && \
-            # Démarrer/redémarrer le serveur Node.js avec PM2
-            pm2 start server.js --name kryzahub-server || pm2 restart kryzahub-server"
+            # Démarrer/redémarrer le serveur Node.js avec PM2 et l'environnement correct
+            NODE_ENV=\"${{ inputs.environment == 'staging' && 'development' || 'production' }}\" pm2 start server.js --name kryzahub-server || \
+            NODE_ENV=\"${{ inputs.environment == 'staging' && 'development' || 'production' }}\" pm2 restart kryzahub-server"
 
       - name: Verify server status
         env:
