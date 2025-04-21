@@ -1,4 +1,3 @@
-# .github/workflows/build-vuejs.yml
 name: Reusable Vue.js Workflow
 
 on:
@@ -67,7 +66,7 @@ jobs:
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
-      - name: Deploy and build
+      - name: Deploy, build and start server
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -76,8 +75,25 @@ jobs:
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
             cd $PROJECT_PATH && \
             git pull && \
-            if [ ! -d "node_modules" ] || [ -n "$(git diff HEAD^ HEAD -- package.json)" ]; then npm ci; fi && \
-            npm run build"
+            # Installer les dépendances si nécessaire
+            if [ ! -d 'node_modules' ] || [ -n \"$(git diff HEAD^ HEAD -- package.json)\" ]; then npm ci; fi && \
+            # Créer le fichier .env pour le serveur Node.js
+            echo 'NODE_ENV=${{ inputs.environment == 'staging' ? 'development' : 'production' }}' > .env && \
+            echo 'PORT=3000' >> .env && \
+            echo 'CACHE_DURATION=300000' >> .env && \
+            # Construire l'application Vue.js
+            npm run build && \
+            # Arrêter le serveur Node.js s'il est en cours d'exécution
+            pm2 stop kryzahub-server || true && \
+            # Démarrer/redémarrer le serveur Node.js avec PM2
+            pm2 start server.js --name kryzahub-server || pm2 restart kryzahub-server"
+
+      - name: Verify server status
+        env:
+          SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "pm2 status"
 
   notify:
     needs: build
@@ -95,7 +111,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "VUE.JS - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
+              "text": "VUE.JS & STATUS SERVER - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
