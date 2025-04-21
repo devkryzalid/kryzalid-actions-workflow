@@ -78,7 +78,7 @@ jobs:
             # Installer les dépendances si nécessaire
             if [ ! -d 'node_modules' ] || [ -n \"$(git diff HEAD^ HEAD -- package.json)\" ]; then npm ci; fi && \
             # Créer le fichier .env pour le serveur Node.js
-            echo 'NODE_ENV=${{ inputs.environment == 'staging' ? 'development' : 'production' }}' > .env && \
+            echo 'NODE_ENV=${{ inputs.environment == 'staging' && 'development' || 'production' }}' > .env && \
             echo 'PORT=3000' >> .env && \
             echo 'CACHE_DURATION=300000' >> .env && \
             # Construire l'application Vue.js
