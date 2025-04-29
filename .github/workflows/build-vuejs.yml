@@ -86,7 +86,7 @@ jobs:
             # Arrêter le serveur Node.js s'il est en cours d'exécution
             pm2 stop kryzahub-server || true && \
             # Démarrer/redémarrer le serveur Node.js avec PM2 et l'environnement correct
-            NODE_ENV=\"${{ inputs.environment == 'staging' && 'development' || 'production' }}\" pm2 start server.js --name kryzahub-server || \
+            NODE_ENV=\"${{ inputs.environment == 'staging' && 'development' || 'production' }}\" pm2 start server/index.js --name kryzahub-server || \
             NODE_ENV=\"${{ inputs.environment == 'staging' && 'development' || 'production' }}\" pm2 restart kryzahub-server"
 
       - name: Verify server status
