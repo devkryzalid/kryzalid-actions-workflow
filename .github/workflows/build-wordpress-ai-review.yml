@@ -117,6 +117,7 @@ jobs:
         id: ai
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: /usr/bin/bash -e {0}
         run: |
           PAYLOAD=$(jq -n --arg title "${{ steps.data.outputs.title }}" \
                           --arg desc "${{ steps.data.outputs.description }}" \
@@ -148,6 +149,7 @@ jobs:
         id: code_review
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: /usr/bin/bash -e {0}
         run: |
           PAYLOAD=$(jq -n --arg diff "$(echo "${{ steps.diff.outputs.diff_b64 }}" | base64 -d)" \
                           '{
@@ -178,6 +180,7 @@ jobs:
         if: success()
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: /usr/bin/bash -e {0}
         run: |
           PAYLOAD=$(jq -n --arg title "${{ steps.data.outputs.title }}" \
                           --arg desc "${{ steps.data.outputs.description }}" \
@@ -311,4 +314,3 @@ jobs:
           echo "ts=$(echo $RESPONSE | jq -r '.ts // ""')" >> $GITHUB_OUTPUT
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
