@@ -126,7 +126,7 @@ jobs:
                             messages: [
                               {
                                 role: "system",
-                                content: "Tu es un expert WordPress chargé d'analyser une Pull Request. Voici le prompt : Vérifie la cohérence entre le titre, la description, et le diff Git."
+                                content: "Tu es un assistant chargé de vérifier la qualité d'une Pull Request (PR) sur un projet WordPress.\n\nJe vais te fournir :\n- Le titre actuel de la PR\n- La description actuelle de la PR\n- Le diff Git associé (modifications du code)\n\nTon objectif est de :\n\n1. Vérifier la cohérence globale :\n   - Le titre doit correspondre aux modifications visibles dans le diff.\n   - La description doit expliquer clairement le **contexte**, les **changements** effectués, et **l'objectif fonctionnel**.\n   - Le diff doit bien refléter ce qui est décrit dans la description.\n\n2. Proposer :\n   - Un **titre** plus clair ou plus précis si besoin.\n   - Une **description** améliorée qui clarifie le contenu, la logique ou la finalité de la PR.\n\n**Critères à respecter :**\n- Le titre doit être **concis**, **parlant** et **fonctionnel** (ex: \"Ajout du champ ACF pour la FAQ\").\n- La description doit être **utile à un reviewer** : ce qui a été changé, pourquoi, et comment le tester.\n\n**Format de réponse en JSON strict :**\n{\n  \"valid\": true | false,\n  \"comment\": \"Commentaire constructif expliquant les incohérences ou étant vide si tout est conforme.\",\n  \"suggested_title\": \"Titre alternatif proposé.\",\n  \"suggested_description\": \"Description alternative proposée.\"\n}"
                               },
                               {
                                 role: "user",
@@ -141,19 +141,133 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
-          COMMENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l’IA."')
-          echo "comment=$COMMENT" >> $GITHUB_OUTPUT
+          PR_REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'IA."')
+          echo "pr_review=$PR_REVIEW" >> $GITHUB_OUTPUT
 
-      - name: Post AI Review in Slack thread
+      - name: Run code review
+        id: code_review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          curl -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-            -H "Content-type: application/json" \
-            -d "{
-              \"channel\": \"#kryzabuild\",
-              \"thread_ts\": \"${{ needs.notify.outputs.slack_ts }}\",
-              \"text\": \"🤖 *AI Code Review :*\n\n---\n\n${{ steps.ai.outputs.comment }}\"
-            }"
+          PAYLOAD=$(jq -n --arg diff "$(echo "${{ steps.diff.outputs.diff_b64 }}" | base64 -d)" \
+                          '{
+                            model: "gpt-4-0125-preview",
+                            messages: [
+                              {
+                                role: "system",
+                                content: "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF), bienveillant mais rigoureux.\n\nTu vas analyser un diff Git d'une Pull Request.\n\nVérifie les points suivants :\n\n1. **Structure WordPress respectée** :\n   - Pas de logique métier dans les templates.\n   - Utilisation correcte des hooks (add_action, add_filter) et des fichiers functions.php ou custom plugin.\n\n2. **Organisation du code** :\n   - Séparation nette entre logique PHP, présentation Twig (si Timber) et données ACF.\n   - Préférence pour des fonctions réutilisables, pas de duplication inutile.\n\n3. **Clarté et nommage** :\n   - Fonctions, fichiers et variables bien nommés.\n   - Slugs/logiques WP explicites (mytheme_display_featured_posts > display_homepage_featured_posts, etc.).\n\n4. **Performance et sécurité** :\n   - esc_html, esc_url, wp_nonce_field utilisés si nécessaire.\n   - Requêtes optimisées, pas de query_posts mal utilisé.\n\n5. **Compatibilité et extensibilité** :\n   - Code compatible avec Gutenberg, Timber, WPML ou ACF selon le projet.\n   - Aucune surcharge inutile de core WP.\n\n6. **Respect des standards WP** :\n   - Code propre, indentation WP Coding Standards.\n   - Pas de var_dump, echo en dur dans les templates.\n\n7. **Tests manuels et reproductibilité** :\n   - Instructions de test claires dans la description.\n   - Fonctionnement non cassé pour d'autres pages/modules.\n\n**Format de réponse :**\n{\n  \"valid\": true | false,\n  \"formattedComment\": \"Texte en Markdown :\\n- Soit une liste de problèmes sous forme : '- ❌ problème'\\n- Soit : '✅ Aucun problème détecté, bravo pour cette PR de qualité !'\"\n}"
+                              },
+                              {
+                                role: "user",
+                                content: "Diff Git :\n\($diff)"
+                              }
+                            ],
+                            temperature: 0.3
+                          }')
+
+          RESPONSE=$(curl https://api.openai.com/v1/chat/completions \
+            -s -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          CODE_REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'IA."')
+          echo "code_review=$CODE_REVIEW" >> $GITHUB_OUTPUT
+
+      - name: Generate success message
+        id: success
+        if: success()
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          PAYLOAD=$(jq -n --arg title "${{ steps.data.outputs.title }}" \
+                          --arg desc "${{ steps.data.outputs.description }}" \
+                          --arg diff "$(echo "${{ steps.diff.outputs.diff_b64 }}" | base64 -d)" \
+                          '{
+                            model: "gpt-4-0125-preview",
+                            messages: [
+                              {
+                                role: "system",
+                                content: "Tu es un assistant chargé de générer un message de félicitations pour une PR réussie sur un projet WordPress.\n\nJe vais te fournir :\n- Le titre de la PR\n- Sa description\n- Le diff Git\n\nTu dois générer un message de validation et d'encouragement.\n\n### Critères :\n- Mentionner le type de changement (template, ACF, shortcode, performance, accessibilité, etc.).\n- Complimenter sur la clarté, la structure, le respect des standards WP ou Timber.\n- Être chaleureux, positif et motivant.\n\n### Format attendu :\n{\n  \"success_message\": \"Message personnalisé de félicitations, prêt à être posté dans une PR en format Markdown.\"\n}"
+                              },
+                              {
+                                role: "user",
+                                content: "Titre : \($title)\nDescription : \($desc)\nDiff Git :\n\($diff)"
+                              }
+                            ],
+                            temperature: 0.7
+                          }')
+
+          RESPONSE=$(curl https://api.openai.com/v1/chat/completions \
+            -s -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          SUCCESS_MSG=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'IA."')
+          echo "success_msg=$SUCCESS_MSG" >> $GITHUB_OUTPUT
+
+      - name: Post AI Reviews in Slack thread
+        run: |
+          # Extract JSON values
+          PR_REVIEW_JSON=$(echo '${{ steps.ai.outputs.pr_review }}' | jq -r '.')
+          CODE_REVIEW_JSON=$(echo '${{ steps.code_review.outputs.code_review }}' | jq -r '.')
+          SUCCESS_MSG_JSON=$(echo '${{ steps.success.outputs.success_msg }}' | jq -r '.')
+          
+          # Extract specific fields
+          PR_VALID=$(echo "$PR_REVIEW_JSON" | jq -r '.valid // false')
+          PR_COMMENT=$(echo "$PR_REVIEW_JSON" | jq -r '.comment // "Pas de commentaire"')
+          PR_TITLE=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_title // "Pas de titre suggéré"')
+          PR_DESC=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_description // "Pas de description suggérée"')
+          
+          CODE_VALID=$(echo "$CODE_REVIEW_JSON" | jq -r '.valid // false')
+          CODE_COMMENT=$(echo "$CODE_REVIEW_JSON" | jq -r '.formattedComment // "Pas de commentaire"')
+          
+          SUCCESS_MSG=$(echo "$SUCCESS_MSG_JSON" | jq -r '.success_message // "Félicitations pour cette PR !"')
+          
+          # Format message using heredoc to handle special characters properly
+          MESSAGE=$(cat <<EOF
+          🤖 *AI Code Review :*
+
+          ## 📝 Revue de la PR
+          *Validité:* $([ "$PR_VALID" = "true" ] && echo "✅" || echo "❌")
+          *Commentaire:* $PR_COMMENT
+
+          $([ "$PR_TITLE" != "Pas de titre suggéré" ] && echo "*Titre suggéré:* $PR_TITLE" || echo "")
+          
+          $([ "$PR_DESC" != "Pas de description suggérée" ] && echo "*Description suggérée:* $PR_DESC" || echo "")
+          
+          ## 🔍 Revue technique
+          *Validité:* $([ "$CODE_VALID" = "true" ] && echo "✅" || echo "❌")
+          $CODE_COMMENT
+          
+          $([ "$CODE_VALID" = "true" ] && echo "## 🎉 Félicitations\n$SUCCESS_MSG" || echo "")
+          EOF
+          )
+          
+          # Escape the message for JSON
+          ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
+          
+          # Check if thread_ts exists, use fallback if not
+          THREAD_TS="${{ needs.notify.outputs.slack_ts }}"
+          if [ -z "$THREAD_TS" ]; then
+            # Send as a new message if no thread_ts is available
+            curl -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+              -H "Content-type: application/json" \
+              -d "{
+                \"channel\": \"#kryzabuild\",
+                \"text\": $ESCAPED_MESSAGE
+              }"
+          else
+            # Send as a thread reply
+            curl -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+              -H "Content-type: application/json" \
+              -d "{
+                \"channel\": \"#kryzabuild\",
+                \"thread_ts\": \"$THREAD_TS\",
+                \"text\": $ESCAPED_MESSAGE
+              }"
+          fi
 
 
   notify:
@@ -172,15 +286,29 @@ jobs:
       - name: Send Slack message (build result)
         id: send
         run: |
+          MESSAGE=$(cat <<EOF
+          WORDPRESS - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*
+
+          *Environment:* ${{ inputs.environment }}
+          *Branch:* ${{ github.ref_name }}
+          *Commit:* ${{ env.clean_commit_message }}
+          *Author:* ${{ github.event.head_commit.author.name }}
+
+          <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>
+          EOF
+          )
+          
+          ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
+          
           RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
             -H "Content-type: application/json" \
             -d "{
               \"channel\": \"#kryzabuild\",
-              \"text\": \"WORDPRESS - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment:* ${{ inputs.environment }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ env.clean_commit_message }}\n*Author:* ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>\"
+              \"text\": $ESCAPED_MESSAGE
             }")
 
-          echo "ts=$(echo $RESPONSE | jq -r .ts)" >> $GITHUB_OUTPUT
+          echo "ts=$(echo $RESPONSE | jq -r '.ts // ""')" >> $GITHUB_OUTPUT
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
