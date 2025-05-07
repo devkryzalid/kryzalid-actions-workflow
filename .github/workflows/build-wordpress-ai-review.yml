@@ -1,0 +1,186 @@
+# .github/workflows/build-wordpress-ai-review.yml
+name: Build WordPress AI Review
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (staging or production)'
+        required: true
+        type: string
+    secrets:
+      # Staging secrets
+      SSH_PRIVATE_KEY_STAGING:
+        required: false
+      SSH_USER_STAGING:
+        required: false
+      SERVER_HOST_STAGING:
+        required: false
+      PROJECT_PATH_STAGING:
+        required: false
+      # Production secrets
+      SSH_PRIVATE_KEY_PROD:
+        required: false
+      SSH_USER_PROD:
+        required: false
+      SERVER_HOST_PROD:
+        required: false
+      PROJECT_PATH_PROD:
+        required: false
+      # Common secrets
+      SLACK_BOT_TOKEN:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+
+jobs:
+  validate-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required secrets
+        run: |
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
+               [ -z "${{ secrets.SSH_USER_STAGING }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_STAGING }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_STAGING }}" ]; then
+              echo "Missing required staging secrets"
+              exit 1
+            fi
+          else
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_PROD }}" ] || \
+               [ -z "${{ secrets.SSH_USER_PROD }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_PROD }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_PROD }}" ]; then
+              echo "Missing required production secrets"
+              exit 1
+            fi
+          fi
+
+  build:
+    needs: validate-secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set environment variables
+        id: env
+        run: |
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            echo "build_command=dev" >> $GITHUB_OUTPUT
+          else 
+            echo "build_command=build" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Deploy and build
+        env:
+          SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+          PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
+            cd $PROJECT_PATH && \
+            git pull && \
+            if [ ! -d "node_modules" ] || [ -n "$(git diff HEAD^ HEAD -- package.json)" ]; then npm ci; fi && \
+            npm run ${{ steps.env.outputs.build_command }}"
+
+  ai-code-review:
+    needs: [build, notify]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Get PR data
+        id: data
+        run: |
+          echo "title=${{ github.event.head_commit.message }}" >> $GITHUB_OUTPUT
+          echo "description=Aucune description fournie dans ce push." >> $GITHUB_OUTPUT
+
+      - name: Get diff
+        id: diff
+        run: |
+          git diff HEAD~1 HEAD > diff.txt
+          head -c 20000 diff.txt > truncated_diff.txt
+          DIFF=$(cat truncated_diff.txt | base64 | tr -d '\n')
+          echo "diff_b64=$DIFF" >> $GITHUB_OUTPUT
+
+      - name: Run AI review
+        id: ai
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          PAYLOAD=$(jq -n --arg title "${{ steps.data.outputs.title }}" \
+                          --arg desc "${{ steps.data.outputs.description }}" \
+                          --arg diff "$(echo "${{ steps.diff.outputs.diff_b64 }}" | base64 -d)" \
+                          '{
+                            model: "gpt-4-0125-preview",
+                            messages: [
+                              {
+                                role: "system",
+                                content: "Tu es un expert WordPress chargé d'analyser une Pull Request. Voici le prompt : Vérifie la cohérence entre le titre, la description, et le diff Git."
+                              },
+                              {
+                                role: "user",
+                                content: "Titre : \($title)\nDescription : \($desc)\nDiff Git :\n\($diff)"
+                              }
+                            ],
+                            temperature: 0.3
+                          }')
+
+          RESPONSE=$(curl https://api.openai.com/v1/chat/completions \
+            -s -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          COMMENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l’IA."')
+          echo "comment=$COMMENT" >> $GITHUB_OUTPUT
+
+      - name: Post AI Review in Slack thread
+        run: |
+          curl -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            -H "Content-type: application/json" \
+            -d "{
+              \"channel\": \"#kryzabuild\",
+              \"thread_ts\": \"${{ needs.notify.outputs.slack_ts }}\",
+              \"text\": \"🤖 *AI Code Review :*\n\n---\n\n${{ steps.ai.outputs.comment }}\"
+            }"
+
+
+  notify:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    outputs:
+      slack_ts: ${{ steps.send.outputs.ts }}
+    steps:
+      - name: Clean commit message
+        id: clean_message
+        run: |
+          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
+          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+
+      - name: Send Slack message (build result)
+        id: send
+        run: |
+          RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            -H "Content-type: application/json" \
+            -d "{
+              \"channel\": \"#kryzabuild\",
+              \"text\": \"WORDPRESS - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment:* ${{ inputs.environment }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ env.clean_commit_message }}\n*Author:* ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>\"
+            }")
+
+          echo "ts=$(echo $RESPONSE | jq -r .ts)" >> $GITHUB_OUTPUT
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
