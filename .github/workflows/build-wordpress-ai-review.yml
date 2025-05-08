@@ -122,30 +122,31 @@ jobs:
         run: |
           DECODED_DIFF=$(echo "${{ steps.diff.outputs.diff_b64 }}" | base64 -d)
 
-          PAYLOAD=$(jq -n --arg title "${{ steps.data.outputs.title }}" \
-                            --arg desc "${{ steps.data.outputs.description }}" \
-                            --arg diff "$DECODED_DIFF" \
-                            '{
-                              model: "gpt-4-0125-preview",
-                              messages: [
-                                {
-                                  role: "system",
-                                  content: "Tu es un assistant chargé de vérifier la qualité d'une Pull Request (PR) sur un projet WordPress.\n\nJe vais te fournir :\n- Le titre actuel de la PR\n- La description actuelle de la PR\n- Le diff Git associé (modifications du code)\n\nTon objectif est de :\n\n1. Vérifier la cohérence globale :\n   - Le titre doit correspondre aux modifications visibles dans le diff.\n   - La description doit expliquer clairement le **contexte**, les **changements** effectués, et **l'objectif fonctionnel**.\n   - Le diff doit bien refléter ce qui est décrit dans la description.\n\n2. Proposer :\n   - Un **titre** plus clair ou plus précis si besoin.\n   - Une **description** améliorée qui clarifie le contenu, la logique ou la finalité de la PR.\n\n**Critères à respecter :**\n- Le titre doit être **concis**, **parlant** et **fonctionnel** (ex: \"Ajout du champ ACF pour la FAQ\").\n- La description doit être **utile à un reviewer** : ce qui a été changé, pourquoi, et comment le tester.\n\n"
-                                },
-                                {
-                                  role: "user",
-                                  content: "Titre : \($title)\nDescription : \($desc)\nDiff Git :\n\($diff)"
-                                }
-                              ],
-                              temperature: 0.3
-                            }')
+          PAYLOAD=$(jq -n \
+            --arg title "${{ steps.data.outputs.title }}" \
+            --arg desc "${{ steps.data.outputs.description }}" \
+            --arg diff "$DECODED_DIFF" \
+            '{
+              model: "gpt-4-0125-preview",
+              messages: [
+                {
+                  role: "system",
+                  content: "Tu es un assistant chargé de vérifier la qualité d'une Pull Request (PR) sur un projet WordPress.\n\nJe vais te fournir :\n- Le titre actuel de la PR\n- La description actuelle de la PR\n- Le diff Git associé (modifications du code)\n\nTon objectif est de :\n\n1. Vérifier la cohérence globale :\n   - Le titre doit correspondre aux modifications visibles dans le diff.\n   - La description doit expliquer clairement le **contexte**, les **changements** effectués, et **l'objectif fonctionnel**.\n   - Le diff doit bien refléter ce qui est décrit dans la description.\n\n2. Proposer :\n   - Un **titre** plus clair ou plus précis si besoin.\n   - Une **description** améliorée qui clarifie le contenu, la logique ou la finalité de la PR.\n\n**Critères à respecter :**\n- Le titre doit être **concis**, **parlant** et **fonctionnel** (ex: \"Ajout du champ ACF pour la FAQ\").\n- La description doit être **utile à un reviewer** : ce qui a été changé, pourquoi, et comment le tester.\n\n"
+                },
+                {
+                  role: "user",
+                  content: ("Titre : " + $title + "\nDescription : " + $desc + "\nDiff Git :\n" + $diff)
+                }
+              ],
+              temperature: 0.3
+            }')
 
-          RESPONSE=$(curl https://api.openai.com/v1/chat/completions \
-            -s -H "Authorization: Bearer $OPENAI_API_KEY" \
+          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
-          PR_REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'"'"'IA."')
+          PR_REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'\''IA."')
           echo "pr_review=$PR_REVIEW" >> $GITHUB_OUTPUT
 
       - name: Run code review
@@ -156,28 +157,29 @@ jobs:
         run: |
           DECODED_DIFF=$(echo "${{ steps.diff.outputs.diff_b64 }}" | base64 -d)
 
-          PAYLOAD=$(jq -n --arg diff "$DECODED_DIFF" \
-                          '{
-                            model: "gpt-4-0125-preview",
-                            messages: [
-                              {
-                                role: "system",
-                                content: "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF), bienveillant mais rigoureux.\n\nTu vas analyser un diff Git d'une Pull Request.\n\nVérifie les points suivants :\n\n1. **Structure WordPress respectée** :\n   - Pas de logique métier dans les templates.\n   - Utilisation correcte des hooks (add_action, add_filter) et des fichiers functions.php ou custom plugin.\n\n2. **Organisation du code** :\n   - Séparation nette entre logique PHP, présentation Twig (si Timber) et données ACF.\n   - Préférence pour des fonctions réutilisables, pas de duplication inutile.\n\n3. **Clarté et nommage** :\n   - Fonctions, fichiers et variables bien nommés.\n   - Slugs/logiques WP explicites (mytheme_display_featured_posts > display_homepage_featured_posts, etc.).\n\n4. **Performance et sécurité** :\n   - esc_html, esc_url, wp_nonce_field utilisés si nécessaire.\n   - Requêtes optimisées, pas de query_posts mal utilisé.\n\n5. **Compatibilité et extensibilité** :\n   - Code compatible avec Gutenberg, Timber, WPML ou ACF selon le projet.\n   - Aucune surcharge inutile de core WP.\n\n6. **Respect des standards WP** :\n   - Code propre, indentation WP Coding Standards.\n   - Pas de var_dump, echo en dur dans les templates.\n\n7. **Tests manuels et reproductibilité** :\n   - Instructions de test claires dans la description.\n   - Fonctionnement non cassé pour d'autres pages/modules.\n\n**Format de réponse :**\n{\n  \"valid\": true | false,\n  \"formattedComment\": \"Texte en Markdown :\\n- Soit une liste de problèmes sous forme : '- ❌ problème'\\n- Soit : '✅ Aucun problème détecté, bravo pour cette PR de qualité !'\"\n}"
-                              },
-                              {
-                                role: "user",
-                                content: "Diff Git :\n\($diff)"
-                              }
-                            ],
-                            temperature: 0.3
-                          }')
+          PAYLOAD=$(jq -n \
+            --arg diff "$DECODED_DIFF" \
+            '{
+              model: "gpt-4-0125-preview",
+              messages: [
+                {
+                  role: "system",
+                  content: "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF), bienveillant mais rigoureux.\n\nTu vas analyser un diff Git d'une Pull Request.\n\nVérifie les points suivants :\n\n1. **Structure WordPress respectée** :\n   - Pas de logique métier dans les templates.\n   - Utilisation correcte des hooks (add_action, add_filter) et des fichiers functions.php ou custom plugin.\n\n2. **Organisation du code** :\n   - Séparation nette entre logique PHP, présentation Twig (si Timber) et données ACF.\n   - Préférence pour des fonctions réutilisables, pas de duplication inutile.\n\n3. **Clarté et nommage** :\n   - Fonctions, fichiers et variables bien nommés.\n   - Slugs/logiques WP explicites (mytheme_display_featured_posts > display_homepage_featured_posts, etc.).\n\n4. **Performance et sécurité** :\n   - esc_html, esc_url, wp_nonce_field utilisés si nécessaire.\n   - Requêtes optimisées, pas de query_posts mal utilisé.\n\n5. **Compatibilité et extensibilité** :\n   - Code compatible avec Gutenberg, Timber, WPML ou ACF selon le projet.\n   - Aucune surcharge inutile de core WP.\n\n6. **Respect des standards WP** :\n   - Code propre, indentation WP Coding Standards.\n   - Pas de var_dump, echo en dur dans les templates.\n\n7. **Tests manuels et reproductibilité** :\n   - Instructions de test claires dans la description.\n   - Fonctionnement non cassé pour d'autres pages/modules.\n\n**Format de réponse :**\n{\n  \"valid\": true | false,\n  \"formattedComment\": \"Texte en Markdown :\\n- Soit une liste de problèmes sous forme : '- ❌ problème'\\n- Soit : '✅ Aucun problème détecté, bravo pour cette PR de qualité !'\"\n}"
+                },
+                {
+                  role: "user",
+                  content: ("Diff Git :\n" + $diff)
+                }
+              ],
+              temperature: 0.3
+            }')
 
-          RESPONSE=$(curl https://api.openai.com/v1/chat/completions \
-            -s -H "Authorization: Bearer $OPENAI_API_KEY" \
+          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
-          CODE_REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'IA."')
+          CODE_REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'\''IA."')
           echo "code_review=$CODE_REVIEW" >> $GITHUB_OUTPUT
 
       - name: Generate success message
@@ -189,30 +191,31 @@ jobs:
         run: |
           DECODED_DIFF=$(echo "${{ steps.diff.outputs.diff_b64 }}" | base64 -d)
 
-          PAYLOAD=$(jq -n --arg title "${{ steps.data.outputs.title }}" \
-                          --arg desc "${{ steps.data.outputs.description }}" \
-                          --arg diff "$DECODED_DIFF" \
-                          '{
-                            model: "gpt-4-0125-preview",
-                            messages: [
-                              {
-                                role: "system",
-                                content: "Tu es un assistant chargé de générer un message de félicitations pour une PR réussie sur un projet WordPress.\n\nJe vais te fournir :\n- Le titre de la PR\n- Sa description\n- Le diff Git\n\nTu dois générer un message de validation et d'encouragement.\n\n### Critères :\n- Mentionner le type de changement (template, ACF, shortcode, performance, accessibilité, etc.).\n- Complimenter sur la clarté, la structure, le respect des standards WP ou Timber.\n- Être chaleureux, positif et motivant.\n\n### Format attendu :\n{\n  \"success_message\": \"Message personnalisé de félicitations, prêt à être posté dans une PR en format Markdown.\"\n}"
-                              },
-                              {
-                                role: "user",
-                                content: "Titre : \($title)\nDescription : \($desc)\nDiff Git :\n\($diff)"
-                              }
-                            ],
-                            temperature: 0.7
-                          }')
+          PAYLOAD=$(jq -n \
+            --arg title "${{ steps.data.outputs.title }}" \
+            --arg desc "${{ steps.data.outputs.description }}" \
+            --arg diff "$DECODED_DIFF" \
+            '{
+              model: "gpt-4-0125-preview",
+              messages: [
+                {
+                  role: "system",
+                  content: "Tu es un assistant chargé de générer un message de félicitations pour une PR réussie sur un projet WordPress.\n\nJe vais te fournir :\n- Le titre de la PR\n- Sa description\n- Le diff Git\n\nTu dois générer un message de validation et d'encouragement.\n\n### Critères :\n- Mentionner le type de changement (template, ACF, shortcode, performance, accessibilité, etc.).\n- Complimenter sur la clarté, la structure, le respect des standards WP ou Timber.\n- Être chaleureux, positif et motivant.\n\n### Format attendu :\n{\n  \"success_message\": \"Message personnalisé de félicitations, prêt à être posté dans une PR en format Markdown.\"\n}"
+                },
+                {
+                  role: "user",
+                  content: ("Titre : " + $title + "\nDescription : " + $desc + "\nDiff Git :\n" + $diff)
+                }
+              ],
+              temperature: 0.7
+            }')
 
-          RESPONSE=$(curl https://api.openai.com/v1/chat/completions \
-            -s -H "Authorization: Bearer $OPENAI_API_KEY" \
+          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
-          SUCCESS_MSG=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'IA."')
+          SUCCESS_MSG=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Félicitations pour cette PR !"')
           echo "success_msg=$SUCCESS_MSG" >> $GITHUB_OUTPUT
 
       - name: Post AI Reviews in Slack thread
