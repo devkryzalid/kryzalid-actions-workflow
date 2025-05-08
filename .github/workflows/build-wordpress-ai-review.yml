@@ -295,15 +295,15 @@ jobs:
           SUCCESS_MSG_JSON=$(echo '${{ steps.success.outputs.success_msg }}' | jq -r '.')
           
           # Extract specific fields
-          PR_VALID=$(echo "$PR_REVIEW_JSON" | jq -r '.valid // false')
-          PR_COMMENT=$(echo "$PR_REVIEW_JSON" | jq -r '.comment // "Pas de commentaire"')
-          PR_TITLE=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_title // "Pas de titre suggéré"')
-          PR_DESC=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_description // "Pas de description suggérée"')
+          PR_VALID="false"
+          PR_COMMENT="Pas de commentaire"
+          PR_TITLE="Pas de titre suggéré"
+          PR_DESC="Pas de description suggérée"
           
-          CODE_VALID=$(echo "$CODE_REVIEW_JSON" | jq -r '.valid // false')
-          CODE_COMMENT=$(echo "$CODE_REVIEW_JSON" | jq -r '.formattedComment // "Pas de commentaire"')
+          CODE_VALID="false"
+          CODE_COMMENT="Pas de commentaire"
           
-          SUCCESS_MSG=$(echo "$SUCCESS_MSG_JSON" | jq -r '.success_message // "Félicitations pour cette PR !"')
+          SUCCESS_MSG="${{ steps.ai.outputs.success_msg }}"
           
           # Format message using heredoc to handle special characters properly
           MESSAGE=$(cat <<EOF
@@ -321,7 +321,8 @@ jobs:
           *Validité:* $([ "$CODE_VALID" = "true" ] && echo "✅" || echo "❌")
           $CODE_COMMENT
           
-          $([ "$CODE_VALID" = "true" ] && echo "## 🎉 Félicitations\n$SUCCESS_MSG" || echo "")
+          ## 🎉 Félicitations
+          $SUCCESS_MSG
           EOF
           )
           
