@@ -120,20 +120,24 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
+          TITLE="${{ steps.data.outputs.title }}"
+          DESC="${{ steps.data.outputs.description }}"
+          DIFF="${{ steps.diff.outputs.diff_b64 }}"
+
+          CONTENT="Titre : ${TITLE}\nDescription : ${DESC}\nDiff Git (base64) :\n${DIFF}"
+
           PAYLOAD=$(jq -n \
-            --arg title "${{ steps.data.outputs.title }}" \
-            --arg desc "${{ steps.data.outputs.description }}" \
-            --arg diff_b64 "${{ steps.diff.outputs.diff_b64 }}" \
+            --arg content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
                 {
                   role: "system",
-                  content: "Tu es un assistant chargé de vérifier la qualité d'une Pull Request (PR) sur un projet WordPress.\n\nJe vais te fournir :\n- Le titre actuel de la PR\n- La description actuelle de la PR\n- Le diff Git associé (modifications du code), encodé en base64.\n\nTon objectif est de :\n\n1. Vérifier la cohérence globale :\n   - Le titre doit correspondre aux modifications visibles dans le diff.\n   - La description doit expliquer clairement le contexte, les changements effectués, et l'objectif fonctionnel.\n   - Le diff doit bien refléter ce qui est décrit dans la description.\n\n2. Proposer :\n   - Un titre plus clair ou plus précis si besoin.\n   - Une description améliorée qui clarifie le contenu, la logique ou la finalité de la PR.\n\n⚠️ Le diff est encodé en base64. Pense à le décoder avant de l’analyser."
+                  content: "Tu es un assistant chargé de vérifier la qualité d'une Pull Request (PR) sur un projet WordPress. Le diff est encodé en base64. Décode-le avant de l'analyser."
                 },
                 {
                   role: "user",
-                  content: ("Titre : " + $title + "\nDescription : " + $desc + "\nDiff Git (base64) :\n" + $diff_b64)
+                  content: $content
                 }
               ],
               temperature: 0.3
@@ -147,25 +151,28 @@ jobs:
           PR_REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'\''IA."')
           echo "pr_review=$PR_REVIEW" >> $GITHUB_OUTPUT
 
-
       - name: Run code review
         id: code_review
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
+          DIFF="${{ steps.diff.outputs.diff_b64 }}"
+
+          CONTENT="Diff Git (base64) :\n${DIFF}"
+
           PAYLOAD=$(jq -n \
-            --arg diff_b64 "${{ steps.diff.outputs.diff_b64 }}" \
+            --arg content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
                 {
                   role: "system",
-                  content: "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF), bienveillant mais rigoureux. Tu vas analyser un diff Git d'une Pull Request encodé en base64.\n\nDécode le diff avant de l’analyser. Voici les critères :\n\n1. Structure WP respectée (pas de logique dans les templates, bons hooks...)\n2. Organisation claire (séparation PHP/ACF/Twig)\n3. Bon nommage (fonctions, fichiers...)\n4. Performance/sécurité (esc_html, requêtes optimisées...)\n5. Compatibilité WPML, Gutenberg, ACF\n6. Standards WP (pas de echo/var_dump, indentation...)\n7. Tests manuels clairs dans la PR\n\nFormat de réponse attendu :\n{\n  \"valid\": true|false,\n  \"formattedComment\": \"- ❌ erreur\\n- ✅ bravo...\"\n}"
+                  content: "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF). Tu vas analyser un diff Git encodé en base64.\n\nDécode le diff avant de l’analyser. Critères : structure WP, nommage, sécurité, ACF, etc. Réponds dans le format : { \"valid\": true|false, \"formattedComment\": \"...\" }"
                 },
                 {
                   role: "user",
-                  content: ("Diff Git (base64) :\n" + $diff_b64)
+                  content: $content
                 }
               ],
               temperature: 0.3
@@ -179,7 +186,6 @@ jobs:
           CODE_REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'\''IA."')
           echo "code_review=$CODE_REVIEW" >> $GITHUB_OUTPUT
 
-
       - name: Generate success message
         id: success
         if: success()
@@ -187,20 +193,24 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
+          TITLE="${{ steps.data.outputs.title }}"
+          DESC="${{ steps.data.outputs.description }}"
+          DIFF="${{ steps.diff.outputs.diff_b64 }}"
+
+          CONTENT="Titre : ${TITLE}\nDescription : ${DESC}\nDiff Git (base64) :\n${DIFF}"
+
           PAYLOAD=$(jq -n \
-            --arg title "${{ steps.data.outputs.title }}" \
-            --arg desc "${{ steps.data.outputs.description }}" \
-            --arg diff_b64 "${{ steps.diff.outputs.diff_b64 }}" \
+            --arg content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
                 {
                   role: "system",
-                  content: "Tu es un assistant chargé de générer un message de félicitations pour une PR WordPress réussie.\n\nJe vais te fournir :\n- Le titre\n- La description\n- Le diff Git (encodé en base64).\n\nTu dois produire un message positif, professionnel et motivant.\n\nCritères :\n- Mentionner le type de changement (ACF, shortcode, accessibilité...)\n- Valoriser la qualité (structure, standards...)\n- Format attendu : { \"success_message\": \"...\" }"
+                  content: "Tu es un assistant chargé de générer un message de félicitations pour une PR WordPress réussie. Le diff est encodé en base64.\n\nMentionne les types de changements (ACF, template, accessibilité...) et félicite chaleureusement. Format attendu : { \"success_message\": \"...\" }"
                 },
                 {
                   role: "user",
-                  content: ("Titre : " + $title + "\nDescription : " + $desc + "\nDiff Git (base64) :\n" + $diff_b64)
+                  content: $content
                 }
               ],
               temperature: 0.7
@@ -213,8 +223,7 @@ jobs:
 
           SUCCESS_MSG=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Félicitations pour cette PR !"')
           echo "success_msg=$SUCCESS_MSG" >> $GITHUB_OUTPUT
-
-
+          
       - name: Post AI Reviews in Slack thread
         run: |
           # Extract JSON values
