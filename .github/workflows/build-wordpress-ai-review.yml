@@ -90,6 +90,48 @@ jobs:
             if [ ! -d "node_modules" ] || [ -n "$(git diff HEAD^ HEAD -- package.json)" ]; then npm ci; fi && \
             npm run ${{ steps.env.outputs.build_command }}"
 
+  notify:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    outputs:
+      slack_ts: ${{ steps.send.outputs.ts }}
+    steps:
+      - name: Clean commit message
+        id: clean_message
+        run: |
+          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
+          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+
+      - name: Send Slack message (build result)
+        id: send
+        run: |
+          MESSAGE=$(cat <<EOF
+          WORDPRESS - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*
+
+          *Environment:* ${{ inputs.environment }}
+          *Branch:* ${{ github.ref_name }}
+          *Commit:* ${{ env.clean_commit_message }}
+          *Author:* ${{ github.event.head_commit.author.name }}
+
+          <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>
+          EOF
+          )
+          
+          ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
+          
+          RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            -H "Content-type: application/json" \
+            -d "{
+              \"channel\": \"#kryzabuild\",
+              \"text\": $ESCAPED_MESSAGE
+            }")
+
+          echo "ts=$(echo $RESPONSE | jq -r '.ts // ""')" >> $GITHUB_OUTPUT
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
   ai-code-review:
     needs: [build, notify]
     runs-on: ubuntu-latest
@@ -303,7 +345,7 @@ jobs:
           CODE_VALID="false"
           CODE_COMMENT="Pas de commentaire"
           
-          SUCCESS_MSG="${{ steps.ai.outputs.success_msg }}"
+          SUCCESS_MSG="${{ steps.success.outputs.success_msg }}"
           
           # Format message using heredoc to handle special characters properly
           MESSAGE=$(cat <<EOF
@@ -329,66 +371,15 @@ jobs:
           # Escape the message for JSON
           ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
           
-          # Check if thread_ts exists, use fallback if not
+          # Use thread_ts from notify job
           THREAD_TS="${{ needs.notify.outputs.slack_ts }}"
-          if [ -z "$THREAD_TS" ]; then
-            # Send as a new message if no thread_ts is available
-            curl -X POST https://slack.com/api/chat.postMessage \
-              -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-              -H "Content-type: application/json" \
-              -d "{
-                \"channel\": \"#kryzabuild\",
-                \"text\": $ESCAPED_MESSAGE
-              }"
-          else
-            # Send as a thread reply
-            curl -X POST https://slack.com/api/chat.postMessage \
-              -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-              -H "Content-type: application/json" \
-              -d "{
-                \"channel\": \"#kryzabuild\",
-                \"thread_ts\": \"$THREAD_TS\",
-                \"text\": $ESCAPED_MESSAGE
-              }"
-          fi
-  notify:
-    needs: build
-    runs-on: ubuntu-latest
-    if: always()
-    outputs:
-      slack_ts: ${{ steps.send.outputs.ts }}
-    steps:
-      - name: Clean commit message
-        id: clean_message
-        run: |
-          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
-          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
-
-      - name: Send Slack message (build result)
-        id: send
-        run: |
-          MESSAGE=$(cat <<EOF
-          WORDPRESS - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*
-
-          *Environment:* ${{ inputs.environment }}
-          *Branch:* ${{ github.ref_name }}
-          *Commit:* ${{ env.clean_commit_message }}
-          *Author:* ${{ github.event.head_commit.author.name }}
-
-          <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>
-          EOF
-          )
           
-          ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
-          
-          RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
+          # Send as a thread reply
+          curl -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
             -H "Content-type: application/json" \
             -d "{
               \"channel\": \"#kryzabuild\",
+              \"thread_ts\": \"$THREAD_TS\",
               \"text\": $ESCAPED_MESSAGE
-            }")
-
-          echo "ts=$(echo $RESPONSE | jq -r '.ts // ""')" >> $GITHUB_OUTPUT
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+            }"
