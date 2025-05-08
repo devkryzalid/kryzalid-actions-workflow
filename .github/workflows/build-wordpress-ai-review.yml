@@ -308,11 +308,11 @@ jobs:
           # Format message using heredoc to handle special characters properly
           MESSAGE=$(cat <<EOF
           🤖 *AI Code Review :*
-
+          
           ## 📝 Revue de la PR
           *Validité:* $([ "$PR_VALID" = "true" ] && echo "✅" || echo "❌")
           *Commentaire:* $PR_COMMENT
-
+          
           $([ "$PR_TITLE" != "Pas de titre suggéré" ] && echo "*Titre suggéré:* $PR_TITLE" || echo "")
           
           $([ "$PR_DESC" != "Pas de description suggérée" ] && echo "*Description suggérée:* $PR_DESC" || echo "")
