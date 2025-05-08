@@ -127,7 +127,7 @@ jobs:
           CONTENT=$(printf "Titre : %s\nDescription : %s\nDiff Git (base64) :\n%s" "${TITLE}" "${DESC}" "${DIFF}" | jq -Rs .)
 
           PAYLOAD=$(jq -n \
-            --argjson content "$CONTENT" \
+            --arg content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
@@ -162,7 +162,7 @@ jobs:
           CONTENT=$(printf "Diff Git (base64) :\\n%s" "${DIFF}" | jq -Rs .)
 
           PAYLOAD=$(jq -n \
-            --argjson content "$CONTENT" \
+            --arg content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
@@ -200,7 +200,7 @@ jobs:
           CONTENT=$(printf "Titre : %s\nDescription : %s\nDiff Git (base64) :\n%s" "${TITLE}" "${DESC}" "${DIFF}" | jq -Rs .)
 
           PAYLOAD=$(jq -n \
-            --argjson content "$CONTENT" \
+            --arg content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
