@@ -186,7 +186,7 @@ jobs:
           # Create payload with proper JSON escaping
           PAYLOAD=$(jq -n \
             --arg model "gpt-4-0125-preview" \
-            --arg system_content "Tu es un assistant chargé de vérifier la qualité d'une Pull Request (PR) sur un projet WordPress. Le diff est encodé en base64. Décode-le avant de l'analyser." \
+            --arg system_content "Tu es un reviewer technique WordPress. Analyse ce diff encodé en base64.\n- Ignore les changements dans wp-admin, wp-includes et plugins\n- Résume les changements en 2-3 phrases\n- Identifie maximum 3 problèmes critiques\n- Suggère 1-2 améliorations simples\n- Format: points clairs et courts" \
             --arg user_content "Titre : $TITLE\nDescription : $DESC\nDiff Git (base64) :\n$DIFF" \
             '{
               model: $model,
@@ -242,7 +242,7 @@ jobs:
           # Create payload with proper JSON escaping
           PAYLOAD=$(jq -n \
             --arg model "gpt-4-0125-preview" \
-            --arg system_content "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF). Tu vas analyser un diff Git encodé en base64.\n\nDécode le diff avant de l'analyser. Critères : structure WP, nommage, sécurité, ACF, etc." \
+            --arg system_content "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF). Tu vas analyser un diff Git encodé en base64.\n\nDécode le diff avant de l'analyser. Ignore les changements dans wp-admin, wp-includes et plugins. Évalue: structure, nommage, sécurité, bonnes pratiques ACF/Timber. Limite-toi à 3 problèmes techniques maximum. Suggère 1-2 corrections concrètes. Bonus: partage un conseil d'optimisation." \
             --arg user_content "Diff Git (base64) :\n$DIFF" \
             '{
               model: $model,
@@ -301,7 +301,7 @@ jobs:
           # Create payload with proper JSON escaping
           PAYLOAD=$(jq -n \
             --arg model "gpt-4-0125-preview" \
-            --arg system_content "Tu es un assistant chargé de générer un message de félicitations pour une PR WordPress réussie. Le diff est encodé en base64.\n\nMentionne les types de changements (ACF, template, accessibilité...) et félicite chaleureusement." \
+            --arg system_content "Tu es un assistant chargé de générer un message de félicitations court et motivant pour une PR WordPress. Ignore les changements dans wp-admin, wp-includes et plugins. Mentionne 1-2 aspects positifs spécifiques (comme ACF, template, accessibilité) et encourage l'amélioration continue. Ton positif et authentique. Maximum 3 phrases." \
             --arg user_content "Titre : $TITLE\nDescription : $DESC\nDiff Git (base64) :\n$DIFF" \
             '{
               model: $model,
