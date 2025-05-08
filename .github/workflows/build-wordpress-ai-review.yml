@@ -350,41 +350,36 @@ jobs:
             exit 1
           fi
 
-          # Capture AI outputs safely using EOF to preserve multiline content
-          PR_REVIEW_JSON=$(cat <<EOF
+          # Safely assign raw markdown output
+          PR_REVIEW_JSON=$(cat <<'EOF'
           ${{ steps.ai.outputs.pr_review }}
           EOF
           )
-              CODE_REVIEW_JSON=$(cat <<EOF
+
+              CODE_REVIEW_JSON=$(cat <<'EOF'
           ${{ steps.code_review.outputs.code_review }}
           EOF
           )
-              SUCCESS_MSG_JSON=$(cat <<EOF
+
+              SUCCESS_MSG_JSON=$(cat <<'EOF'
           ${{ steps.success.outputs.success_msg }}
           EOF
           )
 
-              # Extract fields safely using jq (fallbacks in case keys don't exist)
-              PR_VALID=$(echo "$PR_REVIEW_JSON" | jq -r '.valid // "false"')
-              PR_COMMENT=$(echo "$PR_REVIEW_JSON" | jq -r '.comment // "Pas de commentaire"')
-              PR_TITLE=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_title // "Pas de titre suggéré"')
-              PR_DESC=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_description // "Pas de description suggérée"')
+              # Extract individual fields (optional if the output is raw Markdown)
+              PR_VALID="false"
+              PR_COMMENT="$PR_REVIEW_JSON"
+              CODE_VALID="false"
+              CODE_COMMENT="$CODE_REVIEW_JSON"
+              SUCCESS_MSG="$SUCCESS_MSG_JSON"
 
-              CODE_VALID=$(echo "$CODE_REVIEW_JSON" | jq -r '.valid // "false"')
-              CODE_COMMENT=$(echo "$CODE_REVIEW_JSON" | jq -r '.formattedComment // "Pas de commentaire"')
-
-              SUCCESS_MSG=$(echo "$SUCCESS_MSG_JSON" | jq -r '.')
-
-              # Build message content
+              # Compose message
               MESSAGE=$(cat <<EOF
           🤖 *AI Code Review :*
 
           ## 📝 Revue de la PR
           *Validité:* $([ "$PR_VALID" = "true" ] && echo "✅" || echo "❌")
-          *Commentaire:* $PR_COMMENT
-
-          $([ "$PR_TITLE" != "Pas de titre suggéré" ] && echo "*Titre suggéré:* $PR_TITLE" || echo "")
-          $([ "$PR_DESC" != "Pas de description suggérée" ] && echo "*Description suggérée:* $PR_DESC" || echo "")
+          $PR_COMMENT
 
           ## 🔍 Revue technique
           *Validité:* $([ "$CODE_VALID" = "true" ] && echo "✅" || echo "❌")
@@ -395,10 +390,8 @@ jobs:
           EOF
           )
 
-              # Escape message for JSON
               ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
 
-              # Send to Slack
               curl -s -X POST https://slack.com/api/chat.postMessage \
                 -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
                 -H "Content-type: application/json" \
