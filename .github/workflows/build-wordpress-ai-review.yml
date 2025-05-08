@@ -126,14 +126,14 @@ jobs:
 
           # Ensure we have valid data to work with
           if [ -z "$DIFF" ]; then
-            echo "pr_review={\"valid\":false,\"comment\":\"Impossible d'analyser le diff (vide).\"}" >> $GITHUB_OUTPUT
+            echo "pr_review=Impossible d'analyser le diff (vide)." >> $GITHUB_OUTPUT
             exit 0
           fi
 
           # Create payload with proper JSON escaping
           PAYLOAD=$(jq -n \
             --arg model "gpt-4-0125-preview" \
-            --arg system_content "Tu es un assistant chargé de vérifier la qualité d'une Pull Request (PR) sur un projet WordPress. Le diff est encodé en base64. Décode-le avant de l'analyser. Réponds dans le format JSON : {\"valid\": true|false, \"comment\": \"...\", \"suggested_title\": \"...\", \"suggested_description\": \"...\"}" \
+            --arg system_content "Tu es un assistant chargé de vérifier la qualité d'une Pull Request (PR) sur un projet WordPress. Le diff est encodé en base64. Décode-le avant de l'analyser." \
             --arg user_content "Titre : $TITLE\nDescription : $DESC\nDiff Git (base64) :\n$DIFF" \
             '{
               model: $model,
@@ -160,21 +160,17 @@ jobs:
           RESPONSE_BODY=$(echo "$RESPONSE" | sed '$ d')
           
           if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "pr_review={\"valid\":false,\"comment\":\"Erreur API OpenAI: $HTTP_CODE\"}" >> $GITHUB_OUTPUT
+            echo "pr_review=Erreur API OpenAI: $HTTP_CODE" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Extract and validate the response
+          # Extract the response
           PR_REVIEW=$(echo "$RESPONSE_BODY" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'\''IA."')
           
-          # Ensure the output is valid JSON, or provide a fallback
-          if ! echo "$PR_REVIEW" | jq empty 2>/dev/null; then
-            PR_REVIEW="{\"valid\":false,\"comment\":\"$PR_REVIEW\"}"
-          fi
-          
-          # Escape for GitHub output
-          PR_REVIEW_ESCAPED=$(echo "$PR_REVIEW" | jq -c -R .)
-          echo "pr_review=$PR_REVIEW_ESCAPED" >> $GITHUB_OUTPUT
+          # Store the raw text output
+          echo "pr_review<<EOF" >> $GITHUB_OUTPUT
+          echo "$PR_REVIEW" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Run code review
         id: code_review
@@ -186,14 +182,14 @@ jobs:
 
           # Ensure we have valid data to work with
           if [ -z "$DIFF" ]; then
-            echo "code_review={\"valid\":false,\"formattedComment\":\"Impossible d'analyser le diff (vide).\"}" >> $GITHUB_OUTPUT
+            echo "code_review=Impossible d'analyser le diff (vide)." >> $GITHUB_OUTPUT
             exit 0
           fi
 
           # Create payload with proper JSON escaping
           PAYLOAD=$(jq -n \
             --arg model "gpt-4-0125-preview" \
-            --arg system_content "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF). Tu vas analyser un diff Git encodé en base64.\n\nDécode le diff avant de l'analyser. Critères : structure WP, nommage, sécurité, ACF, etc. Réponds dans le format : { \"valid\": true|false, \"formattedComment\": \"...\" }" \
+            --arg system_content "Tu es un développeur senior WordPress expert (classique et avec Timber/ACF). Tu vas analyser un diff Git encodé en base64.\n\nDécode le diff avant de l'analyser. Critères : structure WP, nommage, sécurité, ACF, etc." \
             --arg user_content "Diff Git (base64) :\n$DIFF" \
             '{
               model: $model,
@@ -220,21 +216,17 @@ jobs:
           RESPONSE_BODY=$(echo "$RESPONSE" | sed '$ d')
           
           if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "code_review={\"valid\":false,\"formattedComment\":\"Erreur API OpenAI: $HTTP_CODE\"}" >> $GITHUB_OUTPUT
+            echo "code_review=Erreur API OpenAI: $HTTP_CODE" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Extract and validate the response
+          # Extract the response
           CODE_REVIEW=$(echo "$RESPONSE_BODY" | jq -r '.choices[0].message.content // "Aucune réponse reçue de l'\''IA."')
           
-          # Ensure the output is valid JSON, or provide a fallback
-          if ! echo "$CODE_REVIEW" | jq empty 2>/dev/null; then
-            CODE_REVIEW="{\"valid\":false,\"formattedComment\":\"$CODE_REVIEW\"}"
-          fi
-          
-          # Escape for GitHub output
-          CODE_REVIEW_ESCAPED=$(echo "$CODE_REVIEW" | jq -c -R .)
-          echo "code_review=$CODE_REVIEW_ESCAPED" >> $GITHUB_OUTPUT
+          # Store the raw text output
+          echo "code_review<<EOF" >> $GITHUB_OUTPUT
+          echo "$CODE_REVIEW" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Generate success message
         id: success
@@ -249,14 +241,14 @@ jobs:
 
           # Skip if no diff available
           if [ -z "$DIFF" ]; then
-            echo "success_msg={\"success_message\":\"Félicitations pour cette PR !\"}" >> $GITHUB_OUTPUT
+            echo "success_msg=Félicitations pour cette PR !" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           # Create payload with proper JSON escaping
           PAYLOAD=$(jq -n \
             --arg model "gpt-4-0125-preview" \
-            --arg system_content "Tu es un assistant chargé de générer un message de félicitations pour une PR WordPress réussie. Le diff est encodé en base64.\n\nMentionne les types de changements (ACF, template, accessibilité...) et félicite chaleureusement. Format attendu : { \"success_message\": \"...\" }" \
+            --arg system_content "Tu es un assistant chargé de générer un message de félicitations pour une PR WordPress réussie. Le diff est encodé en base64.\n\nMentionne les types de changements (ACF, template, accessibilité...) et félicite chaleureusement." \
             --arg user_content "Titre : $TITLE\nDescription : $DESC\nDiff Git (base64) :\n$DIFF" \
             '{
               model: $model,
@@ -283,21 +275,17 @@ jobs:
           RESPONSE_BODY=$(echo "$RESPONSE" | sed '$ d')
           
           if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "success_msg={\"success_message\":\"Félicitations pour cette PR !\"}" >> $GITHUB_OUTPUT
+            echo "success_msg=Félicitations pour cette PR !" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Extract and validate the response
+          # Extract the response
           SUCCESS_MSG=$(echo "$RESPONSE_BODY" | jq -r '.choices[0].message.content // "Félicitations pour cette PR !"')
           
-          # Ensure the output is valid JSON, or provide a fallback
-          if ! echo "$SUCCESS_MSG" | jq empty 2>/dev/null; then
-            SUCCESS_MSG="{\"success_message\":\"$SUCCESS_MSG\"}"
-          fi
-          
-          # Escape for GitHub output
-          SUCCESS_MSG_ESCAPED=$(echo "$SUCCESS_MSG" | jq -c -R .)
-          echo "success_msg=$SUCCESS_MSG_ESCAPED" >> $GITHUB_OUTPUT
+          # Store the raw text output
+          echo "success_msg<<EOF" >> $GITHUB_OUTPUT
+          echo "$SUCCESS_MSG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Post AI Reviews in Slack thread
         run: |
