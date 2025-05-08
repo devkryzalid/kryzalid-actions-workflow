@@ -124,7 +124,7 @@ jobs:
           DESC="${{ steps.data.outputs.description }}"
           DIFF="${{ steps.diff.outputs.diff_b64 }}"
 
-          CONTENT="Titre : ${TITLE}\nDescription : ${DESC}\nDiff Git (base64) :\n${DIFF}"
+          CONTENT=$(printf "Titre : %s\\nDescription : %s\\nDiff Git (base64) :\\n%s" "${TITLE}" "${DESC}" "${DIFF}")
 
           PAYLOAD=$(jq -n \
             --arg content "$CONTENT" \
@@ -159,7 +159,7 @@ jobs:
         run: |
           DIFF="${{ steps.diff.outputs.diff_b64 }}"
 
-          CONTENT="Diff Git (base64) :\n${DIFF}"
+          CONTENT=$(printf "Diff Git (base64) :\\n%s" "${DIFF}")
 
           PAYLOAD=$(jq -n \
             --arg content "$CONTENT" \
@@ -197,7 +197,7 @@ jobs:
           DESC="${{ steps.data.outputs.description }}"
           DIFF="${{ steps.diff.outputs.diff_b64 }}"
 
-          CONTENT="Titre : ${TITLE}\nDescription : ${DESC}\nDiff Git (base64) :\n${DIFF}"
+          CONTENT=$(printf "Titre : %s\\nDescription : %s\\nDiff Git (base64) :\\n%s" "${TITLE}" "${DESC}" "${DIFF}")
 
           PAYLOAD=$(jq -n \
             --arg content "$CONTENT" \
@@ -223,7 +223,7 @@ jobs:
 
           SUCCESS_MSG=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Félicitations pour cette PR !"')
           echo "success_msg=$SUCCESS_MSG" >> $GITHUB_OUTPUT
-          
+
       - name: Post AI Reviews in Slack thread
         run: |
           # Extract JSON values
