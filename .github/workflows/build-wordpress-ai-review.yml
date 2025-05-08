@@ -117,9 +117,9 @@ jobs:
           <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>
           EOF
           )
-          
+
           ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
-          
+
           RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
             -H "Content-type: application/json" \
@@ -128,7 +128,18 @@ jobs:
               \"text\": $ESCAPED_MESSAGE
             }")
 
-          echo "ts=$(echo $RESPONSE | jq -r '.ts // ""')" >> $GITHUB_OUTPUT
+          echo "Slack response: $RESPONSE"
+
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          TS=$(echo "$RESPONSE" | jq -r '.ts // empty')
+          ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+
+          if [ "$OK" != "true" ]; then
+            echo "Slack message failed: $ERROR"
+            exit 1
+          fi
+
+          echo "ts=$TS" >> $GITHUB_OUTPUT
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
