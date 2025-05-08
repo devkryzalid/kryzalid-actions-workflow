@@ -124,10 +124,10 @@ jobs:
           DESC="${{ steps.data.outputs.description }}"
           DIFF="${{ steps.diff.outputs.diff_b64 }}"
 
-          CONTENT=$(printf "Titre : %s\\nDescription : %s\\nDiff Git (base64) :\\n%s" "${TITLE}" "${DESC}" "${DIFF}")
+          CONTENT=$(printf "Titre : %s\nDescription : %s\nDiff Git (base64) :\n%s" "${TITLE}" "${DESC}" "${DIFF}" | jq -Rs .)
 
           PAYLOAD=$(jq -n \
-            --arg content "$CONTENT" \
+            --argjson content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
@@ -159,10 +159,10 @@ jobs:
         run: |
           DIFF="${{ steps.diff.outputs.diff_b64 }}"
 
-          CONTENT=$(printf "Diff Git (base64) :\\n%s" "${DIFF}")
+          CONTENT=$(printf "Diff Git (base64) :\\n%s" "${DIFF}" | jq -Rs .)
 
           PAYLOAD=$(jq -n \
-            --arg content "$CONTENT" \
+            --argjson content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
@@ -197,10 +197,10 @@ jobs:
           DESC="${{ steps.data.outputs.description }}"
           DIFF="${{ steps.diff.outputs.diff_b64 }}"
 
-          CONTENT=$(printf "Titre : %s\\nDescription : %s\\nDiff Git (base64) :\\n%s" "${TITLE}" "${DESC}" "${DIFF}")
+          CONTENT=$(printf "Titre : %s\nDescription : %s\nDiff Git (base64) :\n%s" "${TITLE}" "${DESC}" "${DIFF}" | jq -Rs .)
 
           PAYLOAD=$(jq -n \
-            --arg content "$CONTENT" \
+            --argjson content "$CONTENT" \
             '{
               model: "gpt-4-0125-preview",
               messages: [
