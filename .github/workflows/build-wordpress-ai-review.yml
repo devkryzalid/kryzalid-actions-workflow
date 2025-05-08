@@ -350,24 +350,33 @@ jobs:
             exit 1
           fi
 
-          # Extract JSON values (attention : les strings doivent être bien formatées)
-          PR_REVIEW_JSON="${{ steps.ai.outputs.pr_review }}"
-          CODE_REVIEW_JSON="${{ steps.code_review.outputs.code_review }}"
-          SUCCESS_MSG_JSON="${{ steps.success.outputs.success_msg }}"
+          # Capture AI outputs safely using EOF to preserve multiline content
+          PR_REVIEW_JSON=$(cat <<EOF
+          ${{ steps.ai.outputs.pr_review }}
+          EOF
+          )
+              CODE_REVIEW_JSON=$(cat <<EOF
+          ${{ steps.code_review.outputs.code_review }}
+          EOF
+          )
+              SUCCESS_MSG_JSON=$(cat <<EOF
+          ${{ steps.success.outputs.success_msg }}
+          EOF
+          )
 
-          # Parse fields from outputs if available
-          PR_VALID=$(echo "$PR_REVIEW_JSON" | jq -r '.valid // "false"')
-          PR_COMMENT=$(echo "$PR_REVIEW_JSON" | jq -r '.comment // "Pas de commentaire"')
-          PR_TITLE=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_title // "Pas de titre suggéré"')
-          PR_DESC=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_description // "Pas de description suggérée"')
+              # Extract fields safely using jq (fallbacks in case keys don't exist)
+              PR_VALID=$(echo "$PR_REVIEW_JSON" | jq -r '.valid // "false"')
+              PR_COMMENT=$(echo "$PR_REVIEW_JSON" | jq -r '.comment // "Pas de commentaire"')
+              PR_TITLE=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_title // "Pas de titre suggéré"')
+              PR_DESC=$(echo "$PR_REVIEW_JSON" | jq -r '.suggested_description // "Pas de description suggérée"')
 
-          CODE_VALID=$(echo "$CODE_REVIEW_JSON" | jq -r '.valid // "false"')
-          CODE_COMMENT=$(echo "$CODE_REVIEW_JSON" | jq -r '.formattedComment // "Pas de commentaire"')
+              CODE_VALID=$(echo "$CODE_REVIEW_JSON" | jq -r '.valid // "false"')
+              CODE_COMMENT=$(echo "$CODE_REVIEW_JSON" | jq -r '.formattedComment // "Pas de commentaire"')
 
-          SUCCESS_MSG=$(echo "$SUCCESS_MSG_JSON" | jq -r '.')
+              SUCCESS_MSG=$(echo "$SUCCESS_MSG_JSON" | jq -r '.')
 
-          # Format Slack message
-          MESSAGE=$(cat <<EOF
+              # Build message content
+              MESSAGE=$(cat <<EOF
           🤖 *AI Code Review :*
 
           ## 📝 Revue de la PR
@@ -384,13 +393,13 @@ jobs:
           ## 🎉 Félicitations
           $SUCCESS_MSG
           EOF
-              )
+          )
 
-              # Escape message
+              # Escape message for JSON
               ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
 
-              # Post to Slack thread
-              curl -X POST https://slack.com/api/chat.postMessage \
+              # Send to Slack
+              curl -s -X POST https://slack.com/api/chat.postMessage \
                 -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
                 -H "Content-type: application/json" \
                 -d "{
