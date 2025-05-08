@@ -341,56 +341,60 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Post AI Reviews in Slack thread
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          THREAD_TS: ${{ needs.notify.outputs.slack_ts }}
         run: |
+          if [ -z "$THREAD_TS" ]; then
+            echo "❌ THREAD_TS is empty, cannot reply in thread"
+            exit 1
+          fi
+
           # Extract JSON values
-          PR_REVIEW_JSON=$(echo '${{ steps.ai.outputs.pr_review }}' | jq -r '.')
-          CODE_REVIEW_JSON=$(echo '${{ steps.code_review.outputs.code_review }}' | jq -r '.')
-          SUCCESS_MSG_JSON=$(echo '${{ steps.success.outputs.success_msg }}' | jq -r '.')
-          
+          PR_REVIEW_JSON=$(echo "${{ steps.ai.outputs.pr_review }}" | jq -r '.')
+          CODE_REVIEW_JSON=$(echo "${{ steps.code_review.outputs.code_review }}" | jq -r '.')
+          SUCCESS_MSG_JSON=$(echo "${{ steps.success.outputs.success_msg }}" | jq -r '.')
+
           # Extract specific fields
           PR_VALID="false"
           PR_COMMENT="Pas de commentaire"
           PR_TITLE="Pas de titre suggéré"
           PR_DESC="Pas de description suggérée"
-          
+
           CODE_VALID="false"
           CODE_COMMENT="Pas de commentaire"
-          
-          SUCCESS_MSG="${{ steps.success.outputs.success_msg }}"
-          
+
+          SUCCESS_MSG="$SUCCESS_MSG_JSON"
+
           # Format message using heredoc to handle special characters properly
           MESSAGE=$(cat <<EOF
           🤖 *AI Code Review :*
-          
+
           ## 📝 Revue de la PR
           *Validité:* $([ "$PR_VALID" = "true" ] && echo "✅" || echo "❌")
           *Commentaire:* $PR_COMMENT
-          
+
           $([ "$PR_TITLE" != "Pas de titre suggéré" ] && echo "*Titre suggéré:* $PR_TITLE" || echo "")
-          
           $([ "$PR_DESC" != "Pas de description suggérée" ] && echo "*Description suggérée:* $PR_DESC" || echo "")
-          
+
           ## 🔍 Revue technique
           *Validité:* $([ "$CODE_VALID" = "true" ] && echo "✅" || echo "❌")
           $CODE_COMMENT
-          
+
           ## 🎉 Félicitations
           $SUCCESS_MSG
           EOF
-          )
-          
-          # Escape the message for JSON
-          ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
-          
-          # Use thread_ts from notify job
-          THREAD_TS="${{ needs.notify.outputs.slack_ts }}"
-          
-          # Send as a thread reply
-          curl -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-            -H "Content-type: application/json" \
-            -d "{
-              \"channel\": \"#kryzabuild\",
-              \"thread_ts\": \"$THREAD_TS\",
-              \"text\": $ESCAPED_MESSAGE
-            }"
+              )
+
+              # Escape the message for JSON
+              ESCAPED_MESSAGE=$(echo "$MESSAGE" | jq -Rs .)
+
+              # Send the message in the thread
+              curl -X POST https://slack.com/api/chat.postMessage \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H "Content-type: application/json" \
+                -d "{
+                  \"channel\": \"#kryzabuild\",
+                  \"thread_ts\": \"$THREAD_TS\",
+                  \"text\": $ESCAPED_MESSAGE
+                }"
