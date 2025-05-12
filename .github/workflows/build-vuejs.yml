@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check required secrets
+        shell: bash
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
@@ -67,6 +68,7 @@ jobs:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Deploy, build and start server
+        shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -90,6 +92,7 @@ jobs:
             NODE_ENV=\"${{ inputs.environment == 'staging' && 'development' || 'production' }}\" pm2 restart kryzahub-server"
 
       - name: Verify server status
+        shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -103,6 +106,7 @@ jobs:
     steps:
       - name: Clean commit message
         id: clean_message
+        shell: bash
         run: |
           CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
           echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV

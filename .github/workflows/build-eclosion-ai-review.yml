@@ -382,6 +382,7 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           THREAD_TS: ${{ needs.notify.outputs.slack_ts }}
+        shell: bash
         run: |
           if [ -z "$THREAD_TS" ]; then
             echo "❌ THREAD_TS is empty, cannot reply in thread"

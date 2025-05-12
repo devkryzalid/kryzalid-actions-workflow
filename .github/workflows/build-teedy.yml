@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check required secrets
+        shell: bash
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
@@ -72,17 +73,20 @@ jobs:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Configure SSH known hosts
+        shell: bash
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
       - name: Set locale and environment
+        shell: bash
         run: |
           sudo locale-gen en_US.UTF-8
           echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
 
       - name: Build application
+        shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -106,17 +110,20 @@ jobs:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Configure SSH known hosts
+        shell: bash
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
       - name: Set locale and environment
+        shell: bash
         run: |
           sudo locale-gen en_US.UTF-8
           echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
 
       - name: Deploy to server
+        shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -133,6 +140,7 @@ jobs:
     steps:
       - name: Clean commit message
         id: clean_message
+        shell: bash
         run: |
           CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
           echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV

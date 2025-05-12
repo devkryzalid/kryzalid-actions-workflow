@@ -1,5 +1,5 @@
-# .github/workflows/wordpress-template.yml
-name: Reusable WordPress Workflow
+# .github/workflows/build-teedy-backend.yml
+name: Build and Deploy Teedy Backend
 
 on:
   workflow_call:
@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check required secrets
+        shell: bash
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
@@ -61,6 +62,7 @@ jobs:
     steps:
       - name: Set environment variables
         id: env
+        shell: bash
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             echo "build_command=dev" >> $GITHUB_OUTPUT
@@ -77,6 +79,7 @@ jobs:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Deploy and build
+        shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -93,6 +96,7 @@ jobs:
     steps:
       - name: Clean commit message
         id: clean_message
+        shell: bash
         run: |
           CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
           echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV

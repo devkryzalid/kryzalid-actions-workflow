@@ -38,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check required secrets
+        shell: bash
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
@@ -63,6 +64,7 @@ jobs:
     steps:
       - name: Set environment variables
         id: env
+        shell: bash
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             echo "build_command=dev" >> $GITHUB_OUTPUT
@@ -79,6 +81,7 @@ jobs:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Deploy and build
+        shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
@@ -99,12 +102,14 @@ jobs:
     steps:
       - name: Clean commit message
         id: clean_message
+        shell: bash
         run: |
           CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
           echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
 
       - name: Send Slack message (build result)
         id: send
+        shell: bash
         run: |
           MESSAGE=$(cat <<EOF
           WORDPRESS - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*
@@ -155,12 +160,14 @@ jobs:
 
       - name: Get PR data
         id: data
+        shell: bash
         run: |
           echo "title=${{ github.event.head_commit.message }}" >> $GITHUB_OUTPUT
           echo "description=Aucune description fournie dans ce push." >> $GITHUB_OUTPUT
 
       - name: Get diff
         id: diff
+        shell: bash
         run: |
           git diff HEAD~1 HEAD > diff.txt
           head -c 20000 diff.txt > truncated_diff.txt
@@ -344,6 +351,7 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           THREAD_TS: ${{ needs.notify.outputs.slack_ts }}
+        shell: bash
         run: |
           if [ -z "$THREAD_TS" ]; then
             echo "❌ THREAD_TS is empty, cannot reply in thread"
