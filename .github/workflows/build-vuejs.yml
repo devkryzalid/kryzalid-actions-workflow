@@ -75,6 +75,7 @@ jobs:
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
+            source ~/.zshrc && \
             cd $PROJECT_PATH && \
             git pull && \
             # Installer les dépendances si nécessaire

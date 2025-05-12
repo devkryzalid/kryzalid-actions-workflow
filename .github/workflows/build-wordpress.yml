@@ -86,6 +86,7 @@ jobs:
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
+            source ~/.zshrc && \
             cd $PROJECT_PATH && \
             git pull && \
             if [ ! -d "node_modules" ] || [ -n "$(git diff HEAD^ HEAD -- package.json)" ]; then npm ci; fi && \
