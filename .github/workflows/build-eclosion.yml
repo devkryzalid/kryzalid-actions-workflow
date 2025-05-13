@@ -1,14 +1,14 @@
-name: Build and Deploy Angular Project
+name: Build et Déploiement Projet Angular
 
 on:
   workflow_call:
     inputs:
       environment:
-        description: 'Target environment (staging or production)'
+        description: 'Environnement cible (staging ou production)'
         required: true
         type: string
     secrets:
-      # Staging secrets
+      # Secrets de staging
       SSH_PRIVATE_KEY_STAGING:
         required: false
       SSH_USER_STAGING:
@@ -17,7 +17,7 @@ on:
         required: false
       PROJECT_PATH_STAGING:
         required: false
-      # Production secrets
+      # Secrets de production
       SSH_PRIVATE_KEY_PROD:
         required: false
       SSH_USER_PROD:
@@ -26,7 +26,7 @@ on:
         required: false
       PROJECT_PATH_PROD:
         required: false
-      # Common secrets
+      # Secrets communs
       SLACK_WEBHOOK_URL:
         required: true
 
@@ -34,15 +34,14 @@ jobs:
   validate-secrets:
     runs-on: ubuntu-latest
     steps:
-      - name: Check required secrets
-        shell: bash
+      - name: Vérification des secrets requis
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
                [ -z "${{ secrets.SSH_USER_STAGING }}" ] || \
                [ -z "${{ secrets.SERVER_HOST_STAGING }}" ] || \
                [ -z "${{ secrets.PROJECT_PATH_STAGING }}" ]; then
-              echo "Missing required staging secrets"
+              echo "Secrets de staging manquants"
               exit 1
             fi
           else
@@ -50,7 +49,7 @@ jobs:
                [ -z "${{ secrets.SSH_USER_PROD }}" ] || \
                [ -z "${{ secrets.SERVER_HOST_PROD }}" ] || \
                [ -z "${{ secrets.PROJECT_PATH_PROD }}" ]; then
-              echo "Missing required production secrets"
+              echo "Secrets de production manquants"
               exit 1
             fi
           fi
@@ -58,34 +57,37 @@ jobs:
   build:
     needs: validate-secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Checkout code
+      - name: Capture de l'heure de début
+        run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Checkout du code
         uses: actions/checkout@v3
 
-      - name: Setup Node.js
+      - name: Configuration de Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '16.14.0'
 
-      - name: Set up SSH key
+      - name: Configuration de la clé SSH
         uses: webfactory/ssh-agent@v0.5.3
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
-      - name: Configure SSH known hosts
-        shell: bash
+      - name: Configuration des hôtes SSH connus
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
-      - name: Set locale and environment
+      - name: Configuration des paramètres régionaux et de l'environnement
         shell: bash
         run: |
           sudo locale-gen en_US.UTF-8
           echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
 
-      - name: Build application
+      - name: Déploiement et build
         shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
@@ -104,25 +106,25 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Set up SSH key
+      - name: Configuration de la clé SSH
         uses: webfactory/ssh-agent@v0.5.3
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
-      - name: Configure SSH known hosts
+      - name: Configuration des hôtes SSH connus
         shell: bash
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
-      - name: Set locale and environment
+      - name: Configuration des paramètres régionaux et de l'environnement
         shell: bash
         run: |
           sudo locale-gen en_US.UTF-8
           echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
 
-      - name: Deploy to server
+      - name: Déploiement sur le serveur
         shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
@@ -133,24 +135,45 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -c 'cd $PROJECT_PATH && mkdir -p www dist && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi && rm -rf wwwbkp && mv www wwwbkp && mv dist www'"
 
-  notify:
-    needs: build
+  notify-success:
+    if: success()
+    needs: [build, deploy]
     runs-on: ubuntu-latest
-    if: always()
     steps:
-      - name: Clean commit message
-        id: clean_message
-        shell: bash
+      - name: Calcul de la durée et de la date
+        run: |
+          echo "duration=$(( $(date +%s) - $start_time ))" >> $GITHUB_ENV
+          echo "deploy_date=$(date '+%d/%m/%Y %H:%M')" >> $GITHUB_ENV
+
+      - name: Nettoyage du message de commit
         run: |
           CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
           echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
 
-      - name: Send notification to Slack
+      - name: Notification de succès sur Slack
         uses: slackapi/slack-github-action@v1.24.0
         with:
           payload: |
             {
-              "text": "ECLOSION - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
+              "text": "ANGULAR - *✅ Build et déploiement réussis pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails :*\n• Environnement : *${{ inputs.environment }}*\n• Dépôt : *${{ github.repository }}*\n• Branche : *${{ github.ref_name }}*\n• Déclenché par : *${{ github.actor }}*\n• Date : *${{ env.deploy_date }}*\n• Timeout : *15 minutes*\n\n*Commit :*\n• Message : ${{ env.clean_commit_message }}\n• Auteur : ${{ github.event.head_commit.author.name }}\n• Commit : <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\n\n*Durée :* *${{ env.duration }} secondes*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  notify-failure:
+    if: failure()
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calcul de la date
+        run: echo "deploy_date=$(date '+%d/%m/%Y %H:%M')" >> $GITHUB_ENV
+
+      - name: Notification d'échec sur Slack
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "🚨 *Échec du déploiement pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails :*\n• Environnement : *${{ inputs.environment }}*\n• Dépôt : *${{ github.repository }}*\n• Branche : *${{ github.ref_name }}*\n• Déclenché par : *${{ github.actor }}*\n• Date : *${{ env.deploy_date }}*\n• Job échoué : *build ou deploy*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
