@@ -75,17 +75,21 @@ jobs:
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
           ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
-            source ~/.zshrc && \
+            export NVM_DIR=\"\$HOME/.nvm\" && \
+            [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\" && \
+            nvm use 16.20.2 > /dev/null && \
             cd $PROJECT_PATH && \
             git pull && \
             # Installer les dépendances si nécessaire
-            if [ ! -d 'node_modules' ] || [ -n \"$(git diff HEAD^ HEAD -- package.json)\" ]; then npm ci; fi && \
+            if [ ! -d 'node_modules' ] || [ -n \"\$(git diff HEAD^ HEAD -- package.json)\" ]; then npm ci; fi && \
             # Créer le fichier .env.server pour le serveur Node.js uniquement
             echo 'SERVER_ENV=${{ inputs.environment }}' > .env.server && \
             echo 'PORT=3000' >> .env.server && \
             echo 'CACHE_DURATION=300000' >> .env.server && \
             # Construire l'application Vue.js avec le mode approprié
             npm run build && \
+            # Assurer que la bonne version de pm2 est chargée et à jour
+            pm2 update && \
             # Arrêter le serveur Node.js s'il est en cours d'exécution
             pm2 stop kryzahub-server || true && \
             # Démarrer/redémarrer le serveur Node.js avec PM2 et l'environnement correct
