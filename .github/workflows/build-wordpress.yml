@@ -124,7 +124,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "WORDPRESS - *✅ Build réussi pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails de l'environnement:*\n• Environnement: *${{ inputs.environment }}*\n• Application: *${{ github.repository }}*\n• Dépôt: *${{ github.repository }}*\n• Branche: *${{ github.ref_name }}*\n• Déclenché par: *${{ github.actor }}*\n• Date de déploiement: *${{ env.deploy_date }}*\n• Timeout: *15 minutes*\n\n*Informations du commit:*\n• Message: ${{ env.clean_commit_message }}\n• Auteur: ${{ github.event.head_commit.author.name }}\n• Commit: <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\n\n*Durée:* *${{ env.duration }} secondes*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir l'exécution du workflow>"
+              "text": "WORDPRESS - *${{ github.repository }}* \n\n *✅ Build réussi pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails de l'environnement:*\n• Environnement: *${{ inputs.environment }}*\n• Application: *${{ github.repository }}*\n• Dépôt: *${{ github.repository }}*\n• Branche: *${{ github.ref_name }}*\n• Déclenché par: *${{ github.actor }}*\n• Date de déploiement: *${{ env.deploy_date }}*\n• Timeout: *15 minutes*\n\n*Informations du commit:*\n• Message: ${{ env.clean_commit_message }}\n• Auteur: ${{ github.event.head_commit.author.name }}\n• Commit: <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\n\n*Durée:* *${{ env.duration }} secondes*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir l'exécution du workflow>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -142,7 +142,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "🚨 *Déploiement échoué pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails de l'environnement:*\n• Environnement: *${{ inputs.environment }}*\n• Application: *${{ github.repository }}*\n• Dépôt: *${{ github.repository }}*\n• Branche: *${{ github.ref_name }}*\n• Déclenché par: *${{ github.actor }}*\n• Date de déploiement: *${{ env.deploy_date }}*\n• Job échoué: *build*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir l'exécution du workflow>"
+              "text": "WORDPRESS - *${{ github.repository }}* \n\n 🚨 *Déploiement échoué pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails de l'environnement:*\n• Environnement: *${{ inputs.environment }}*\n• Application: *${{ github.repository }}*\n• Dépôt: *${{ github.repository }}*\n• Branche: *${{ github.ref_name }}*\n• Déclenché par: *${{ github.actor }}*\n• Date de déploiement: *${{ env.deploy_date }}*\n• Job échoué: *build*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir l'exécution du workflow>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
