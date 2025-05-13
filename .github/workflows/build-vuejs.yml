@@ -78,7 +78,7 @@ jobs:
             export NVM_DIR=\"\$HOME/.nvm\" && \
             [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\" && \
             nvm use 16.20.2 > /dev/null && \
-            cd $PROJECT_PATH && \
+            cd \$PROJECT_PATH && \
             git pull && \
             # Installer les dépendances si nécessaire
             if [ ! -d 'node_modules' ] || [ -n \"\$(git diff HEAD^ HEAD -- package.json)\" ]; then npm ci; fi && \
@@ -102,7 +102,11 @@ jobs:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "pm2 status"
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
+            export NVM_DIR=\"\$HOME/.nvm\" && \
+            [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\" && \
+            nvm use 16.20.2 > /dev/null && \
+            pm2 status"
 
   notify:
     needs: build
