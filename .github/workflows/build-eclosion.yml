@@ -54,6 +54,36 @@ jobs:
             fi
           fi
 
+  check-files:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v3
+
+      - name: Vérification des fichiers
+        id: check_files
+        run: |
+          missing_files=""
+          if [ ! -f ".browserslistrc" ]; then
+            missing_files+=".browserslistrc "
+          fi
+          if [ ! -f ".eslintrc.json" ]; then
+            missing_files+=".eslintrc.json "
+          fi
+          echo "missing_files=$missing_files" >> $GITHUB_ENV
+
+      - name: Notification Slack pour fichiers manquants
+        if: env.missing_files != ''
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "ANGULAR - *${{ github.repository }}* \n\n ⚠️ *Attention: Fichiers de configuration manquants*\n\n*Fichiers manquants:* ${{ env.missing_files }}\n\n*Détails:*\n• Branche: *${{ github.ref_name }}*\n• Dépôt: *${{ github.repository }}*\n\nVeuillez ajouter ces fichiers pour assurer une configuration correcte du projet."
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
   build:
     needs: validate-secrets
     runs-on: ubuntu-latest
