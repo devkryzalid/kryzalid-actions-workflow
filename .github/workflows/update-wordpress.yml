@@ -1,11 +1,12 @@
-name: WP Auto Update 
+name: Update WordPress
 
 on:
-  workflow_dispatch:
-
-permissions:
-  contents: write
-  pull-requests: write
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+        default: 'production'
 
 jobs:
   update-wordpress:
