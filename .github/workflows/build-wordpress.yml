@@ -89,7 +89,7 @@ jobs:
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
-      - name: Déploiement et build (générique, shell-agnostic)
+      - name: Déploiement et build
         shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
@@ -97,47 +97,84 @@ jobs:
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
           BRANCH="${{ github.ref_name }}"
-          MODE="${{ steps.env.outputs.build_command }}"  # "dev" en staging, "build" en prod (déjà défini dans ton job)
+          MODE="${{ steps.env.outputs.build_command }}"  # "dev" en staging, "build" en prod
 
-          # On pousse un script Bash côté serveur via here-doc + bash -s -- (indépendant du shell par défaut)
-          ssh -o StrictHostKeyChecking=no "$SSH_USER@$SERVER_HOST" bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" <<'BASH'
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" <<'BASH'
           set -euo pipefail
-          PROJECT_PATH="$1"
+          ROOT="$1"     # racine du repo git
           BRANCH="$2"
           MODE="$3"
 
-          cd "$PROJECT_PATH"
-
-          # 1) Git à jour (force la branche distante suivie)
+          # --- Git au ROOT du repo ---
+          git config --global --add safe.directory "$ROOT" || true
+          cd "$ROOT"
           git fetch --all --prune
           git reset --hard "origin/${BRANCH}"
+          echo "✅ Git reset sur origin/${BRANCH} dans: $ROOT"
 
-          # 2) Assurer Node/NPM dispo, quels que soient les serveurs
-          #    - si nvm est installé: on le charge, et on honore .nvmrc si présent
-          #    - sinon: on compte sur npm global
-          if [ -s "$HOME/.nvm/nvm.sh" ]; then
-            . "$HOME/.nvm/nvm.sh"
-            [ -f .nvmrc ] && nvm use || true
-          fi
+          # --- Trouver automatiquement le dossier qui contient package.json ---
+          choose_workdir() {
+            local base="$1"
 
-          if ! command -v npm >/dev/null 2>&1; then
-            echo "❌ npm introuvable dans PATH. Installe Node globalement ou charge nvm dans le shell non-interactif (~/.bashrc)."
+            # 1) Si le root contient package.json → parfait
+            if [ -f "$base/package.json" ]; then
+              echo "$base"; return 0
+            fi
+
+            # 2) Priorité aux thèmes WordPress (courant dans tes projets)
+            #    Cherche wp-content/themes/* contenant package.json (profondeur limitée)
+            local theme_pkg
+            theme_pkg="$(find "$base/wp-content/themes" -maxdepth 2 -mindepth 1 -type f -name package.json 2>/dev/null | head -n1 || true)"
+            if [ -n "${theme_pkg:-}" ]; then
+              dirname "$theme_pkg"; return 0
+            fi
+
+            # 3) Sinon, 1er package.json trouvé hors node_modules/vendor (profondeur raisonnable)
+            local any_pkg
+            any_pkg="$(find "$base" -maxdepth 4 \
+                -path '*/node_modules/*' -prune -o \
+                -path '*/vendor/*' -prune -o \
+                -type f -name package.json -print | head -n1 || true)"
+            if [ -n "${any_pkg:-}" ]; then
+              dirname "$any_pkg"; return 0
+            fi
+
+            return 1
+          }
+
+          if ! WORKDIR="$(choose_workdir "$ROOT")"; then
+            echo "❌ Aucun package.json trouvé sous $ROOT (hors node_modules/vendor)."
+            echo "   Vérifie que PROJECT_PATH pointe bien sur le repo contenant le code front,"
+            echo "   ou ajoute un input 'workdir' si tu veux forcer un sous-dossier."
             exit 1
           fi
 
+          echo "📁 Dossier Node sélectionné: $WORKDIR"
+
+          # --- Activer Node/npm (nvm si dispo, sinon global) ---
+          if [ -s "$HOME/.nvm/nvm.sh" ]; then
+            . "$HOME/.nvm/nvm.sh"
+            [ -f "$WORKDIR/.nvmrc" ] && (cd "$WORKDIR" && nvm use) || true
+          fi
+          if ! command -v npm >/dev/null 2>&1; then
+            echo "❌ npm introuvable dans PATH. Installe Node globalement ou charge nvm dans les shells non-interactifs."
+            exit 1
+          fi
           echo "Node: $(node -v) | npm: $(npm -v)"
 
-          # 3) Installer deps (ci si lockfile, sinon fallback install)
+          # --- Installer deps & build dans le WORKDIR ---
+          cd "$WORKDIR"
+
           if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            INSTALL_CMD="npm ci"
+            echo "📦 npm ci"
+            npm ci
           else
-            echo "⚠️  Aucun lockfile → fallback npm install"
-            INSTALL_CMD="npm install"
+            echo "⚠️  Aucun lockfile → npm install"
+            npm install
           fi
 
-          $INSTALL_CMD
-
-          # 4) Build (dev ou build)
+          echo "🏗️  npm run $MODE"
           npm run "$MODE"
 
           echo "✅ Déploiement terminé."
