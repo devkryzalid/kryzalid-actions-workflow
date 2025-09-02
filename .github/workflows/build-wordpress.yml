@@ -96,12 +96,48 @@ jobs:
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
-            source ~/.zshrc && \
-            cd $PROJECT_PATH && \
-            git pull && \
-            if [ ! -d 'node_modules' ] || [ -n \"$(git diff HEAD^ HEAD -- package.json)\" ]; then npm ci; fi && \
-            npm run ${{ steps.env.outputs.build_command }}"
+          ssh -o StrictHostKeyChecking=no "$SSH_USER@$SERVER_HOST" '
+            set -euo pipefail
+            # si tu utilises nvm dans ~/.zshrc
+            [ -f "$HOME/.zshrc" ] && . "$HOME/.zshrc" || true
+
+            cd "$PROJECT_PATH"
+
+            # Récupérer la branche suivie et mettre à jour
+            git fetch --all --prune
+            git pull --ff-only || true
+
+            # Déterminer si package.json a changé (tolérant au 1er commit)
+            if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+              PKG_CHANGED="$(git diff --name-only HEAD~1 -- package.json || true)"
+            else
+              PKG_CHANGED=""
+            fi
+
+            # Choisir la commande d install selon présence du lockfile
+            if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+              INSTALL_CMD="npm ci"
+            else
+              echo "⚠️  Aucun lockfile trouvé → fallback sur npm install"
+              INSTALL_CMD="npm install"
+            fi
+
+            # Installer seulement si nécessaire
+            if [ ! -d node_modules ] || [ -n "$PKG_CHANGED" ]; then
+              echo "📦 Installation des dépendances avec: $INSTALL_CMD"
+              $INSTALL_CMD
+            else
+              echo "✅ Dépendances déjà installées et package.json inchangé"
+            fi
+
+            # Node version auto si .nvmrc présent (optionnel)
+            if command -v nvm >/dev/null 2>&1 && [ -f .nvmrc ]; then
+              nvm use || true
+            fi
+
+            # Build
+            npm run '"${{ steps.env.outputs.build_command }}"'
+          '
 
   notify-success:
     if: success()
