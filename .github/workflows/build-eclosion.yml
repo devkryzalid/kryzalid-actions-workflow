@@ -126,7 +126,7 @@ jobs:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -c 'mkdir -p $PROJECT_PATH && source ~/.zshrc && cd $PROJECT_PATH && git pull && npm ci && node_modules/@angular/cli/bin/ng.js build --configuration production && mkdir -p dist public www && cp public/.htaccess dist/ && cp public/robots.txt dist/ && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi'"
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && zsh -c 'mkdir -p $PROJECT_PATH && source ~/.zshrc && cd $PROJECT_PATH && git pull && npm ci && node_modules/@angular/cli/bin/ng.js build --configuration production && mkdir -p dist public www && cp public/.htaccess dist/ && cp public/robots.txt dist/ && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi'"
 
           if [ "${{ inputs.environment }}" = "production" ]; then
             ssh $SSH_USER@$SERVER_HOST "echo '⚠️ Remember to verify robots.txt configuration for production environment'"
@@ -163,7 +163,7 @@ jobs:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -c 'cd $PROJECT_PATH && mkdir -p www dist && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi && rm -rf wwwbkp && mv www wwwbkp && mv dist www'"
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && zsh -c 'cd $PROJECT_PATH && mkdir -p www dist && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi && rm -rf wwwbkp && mv www wwwbkp && mv dist www'"
 
   notify-success:
     if: success()
