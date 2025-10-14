@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: 'Environnement cible (staging ou production)'
+        description: "Environnement cible (staging ou production)"
         required: true
         type: string
     secrets:
@@ -98,7 +98,7 @@ jobs:
       - name: Configuration de Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '16.14.0'
+          node-version: "16.14.0"
 
       - name: Configuration de la clé SSH
         uses: webfactory/ssh-agent@v0.5.3
@@ -126,11 +126,7 @@ jobs:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && zsh -c 'mkdir -p $PROJECT_PATH && source ~/.zshrc && cd $PROJECT_PATH && git pull && npm ci && node_modules/@angular/cli/bin/ng.js build --configuration production && mkdir -p dist public www && cp public/.htaccess dist/ && cp public/robots.txt dist/ && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi'"
-
-          if [ "${{ inputs.environment }}" = "production" ]; then
-            ssh $SSH_USER@$SERVER_HOST "echo '⚠️ Remember to verify robots.txt configuration for production environment'"
-          fi
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && zsh -c 'mkdir -p $PROJECT_PATH && source ~/.zshrc && cd $PROJECT_PATH && git pull && sh build.sh'"
 
   deploy:
     needs: build
@@ -163,7 +159,7 @@ jobs:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && zsh -c 'cd $PROJECT_PATH && mkdir -p www dist && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi && rm -rf wwwbkp && mv www wwwbkp && mv dist www'"
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && zsh -c 'cd $PROJECT_PATH && sh deploy.sh'"
 
   notify-success:
     if: success()
