@@ -87,10 +87,8 @@ jobs:
   build:
     needs: validate-secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Capture de l'heure de début
-        run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
-
       - name: Checkout du code
         uses: actions/checkout@v3
 
@@ -125,7 +123,86 @@ jobs:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && zsh -c 'mkdir -p $PROJECT_PATH && source ~/.zshrc && cd $PROJECT_PATH && git pull && sh build.sh'"
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.environment }}" << 'BASH'
+          set -euo pipefail
+          PROJECT_PATH="$1"
+          BRANCH="$2"
+          ENVIRONMENT="$3"
+
+          # Chargement de nvm si disponible
+          if [ -s "$HOME/.nvm/nvm.sh" ]; then
+            . "$HOME/.nvm/nvm.sh"
+          fi
+
+          # Création et accès au répertoire du projet
+          mkdir -p "$PROJECT_PATH"
+          cd "$PROJECT_PATH"
+
+          # Récupération du code
+          echo "📥 Récupération du code..."
+          git pull
+
+          # Installation des dépendances
+          echo "📦 Installation des dépendances..."
+          npm ci
+
+          # Build Angular
+          echo "🔨 Build Angular en cours..."
+          node_modules/@angular/cli/bin/ng.js build --configuration production
+
+          # Vérification que dist/ existe et n'est pas vide
+          if [ ! -d "dist" ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "❌ ERREUR: dist/ est vide ou n'existe pas après le build"
+            exit 1
+          fi
+          echo "✅ dist/ contient des fichiers"
+
+          # Copie de .htaccess
+          if [ -f "public/.htaccess" ]; then
+            cp public/.htaccess dist/
+            echo "✅ .htaccess copié dans dist/"
+          else
+            echo "⚠️ public/.htaccess non trouvé, étape ignorée"
+          fi
+
+          # Copie de robots.txt
+          if [ -f "public/robots.txt" ]; then
+            cp public/robots.txt dist/
+            echo "✅ robots.txt copié dans dist/"
+          else
+            echo "⚠️ public/robots.txt non trouvé, étape ignorée"
+          fi
+
+          # Copie de sitemap.xml uniquement sur la branche main
+          if [ "$BRANCH" = "main" ] && [ -f "www/sitemap.xml" ]; then
+            cp www/sitemap.xml dist/
+            echo "✅ sitemap.xml copié dans dist/ (branche main)"
+          fi
+
+          # Rappel robots.txt en production
+          if [ "$ENVIRONMENT" = "production" ]; then
+            echo "⚠️ RAPPEL: Vérifiez la configuration de robots.txt pour la production"
+          fi
+
+          echo "✅ Build terminé avec succès"
+          BASH
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Configuration de la clé SSH
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Configuration des hôtes SSH connus
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
       - name: Déploiement du projet
         shell: bash
@@ -136,11 +213,42 @@ jobs:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && zsh -c 'cd $PROJECT_PATH && sh deploy.sh'"
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" << 'BASH'
+          set -euo pipefail
+          PROJECT_PATH="$1"
+          BRANCH="$2"
+
+          cd "$PROJECT_PATH"
+
+          # Vérification et création des répertoires nécessaires
+          mkdir -p www dist
+
+          # Vérification que dist/ n'est pas vide avant le déploiement
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "❌ ERREUR: dist/ est vide. Déploiement annulé."
+            exit 1
+          fi
+
+          # Préservation du sitemap.xml (branche main uniquement)
+          if [ "$BRANCH" = "main" ] && [ -f "www/sitemap.xml" ]; then
+            cp www/sitemap.xml dist/
+            echo "✅ sitemap.xml préservé de www/ vers dist/"
+          fi
+
+          # Swap des répertoires : www -> wwwbkp, dist -> www
+          echo "🔄 Déploiement en cours..."
+          rm -rf wwwbkp
+          mv www wwwbkp
+          mv dist www
+
+          echo "✅ Déploiement terminé avec succès"
+          BASH
 
   notify-success:
     if: success()
-    needs: [build]
+    needs: [build, deploy]
     runs-on: ubuntu-latest
     steps:
 
@@ -161,7 +269,7 @@ jobs:
 
   notify-failure:
     if: failure()
-    needs: [build]
+    needs: [build, deploy]
     runs-on: ubuntu-latest
     steps:
       - name: Calcul de la date
@@ -172,7 +280,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "ANGULAR - *${{ github.repository }}* \n\n 🚨 *Échec du déploiement pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails :*\n• Environnement : *${{ inputs.environment }}*\n• Dépôt : *${{ github.repository }}*\n• Branche : *${{ github.ref_name }}*\n• Déclenché par : *${{ github.actor }}*\n• Date : *${{ env.deploy_date }}*\n• Job échoué : *build*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>"
+              "text": "ANGULAR - *${{ github.repository }}* \n\n 🚨 *Échec du déploiement pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails :*\n• Environnement : *${{ inputs.environment }}*\n• Dépôt : *${{ github.repository }}*\n• Branche : *${{ github.ref_name }}*\n• Déclenché par : *${{ github.actor }}*\n• Date : *${{ env.deploy_date }}*\n• Job échoué : *build/deploy*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
