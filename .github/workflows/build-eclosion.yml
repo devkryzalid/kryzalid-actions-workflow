@@ -177,7 +177,7 @@ jobs:
 
           # Copie de sitemap.xml uniquement sur la branche main
           if [ "$BRANCH" = "main" ] && [ -f "www/sitemap.xml" ]; then
-            cp www/sitemap.xml dist/
+            cp www/sitemap*.{xml,xsl} dist/
             echo "✅ sitemap.xml copié dans dist/ (branche main)"
           fi
 
@@ -251,7 +251,6 @@ jobs:
     needs: [build, deploy]
     runs-on: ubuntu-latest
     steps:
-
       - name: Nettoyage du message de commit
         run: |
           CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')

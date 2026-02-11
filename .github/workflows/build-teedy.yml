@@ -103,6 +103,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Set up SSH key
         uses: webfactory/ssh-agent@v0.5.3
@@ -115,13 +116,6 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
-      - name: Set locale and environment
-        shell: bash
-        run: |
-          sudo locale-gen en_US.UTF-8
-          echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
-          echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
-
       - name: Deploy to server
         shell: bash
         env:
@@ -131,10 +125,41 @@ jobs:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -l -c 'cd $PROJECT_PATH && mkdir -p www dist && if [ \"\$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ] && [ -f www/sitemap.xml ]; then cp www/sitemap.xml dist/; fi && rm -rf wwwbkp && mv www wwwbkp && mv dist www'"
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" << 'BASH'
+          set -euo pipefail
+          PROJECT_PATH="$1"
+          BRANCH="$2"
+
+          cd "$PROJECT_PATH"
+
+          # Vérification et création des répertoires nécessaires
+          mkdir -p www dist
+
+          # Vérification que dist/ n'est pas vide avant le déploiement
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "❌ ERREUR: dist/ est vide. Déploiement annulé."
+            exit 1
+          fi
+
+          # Préservation du sitemap.xml (branche main uniquement)
+          if [ "$BRANCH" = "main" ] && [ -f "www/sitemap.xml" ]; then
+            cp www/sitemap.xml dist/
+            echo "✅ sitemap.xml préservé de www/ vers dist/"
+          fi
+
+          # Swap des répertoires : www -> wwwbkp, dist -> www
+          echo "🔄 Déploiement en cours..."
+          rm -rf wwwbkp
+          mv www wwwbkp
+          mv dist www
+
+          echo "✅ Déploiement terminé avec succès"
+          BASH
 
   notify:
-    needs: build
+    needs: [build, deploy]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -150,7 +175,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "Teedy front-end - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
+              "text": "Teedy front-end - *${{ needs.build.result == 'success' && needs.deploy.result == 'success' && '✅ Build & Deploy Success for ' || '❌ Build or Deploy Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
