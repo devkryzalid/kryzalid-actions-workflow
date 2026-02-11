@@ -60,9 +60,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Capture de l'heure de début
-        run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
-
       - name: Définition des variables d'environnement
         id: env
         shell: bash
@@ -75,14 +72,6 @@ jobs:
 
       - name: Checkout du code
         uses: actions/checkout@v3
-
-      - name: Cache des modules Node.js
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
 
       - name: Configuration de la clé SSH
         uses: webfactory/ssh-agent@v0.5.3

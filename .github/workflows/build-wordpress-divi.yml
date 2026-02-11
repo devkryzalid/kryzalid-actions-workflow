@@ -60,46 +60,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Capture de l'heure de début
-        run: echo "start_time=$(date +%s)" >> $GITHUB_ENV
-
-      - name: Définition des variables d'environnement
-        id: env
-        shell: bash
-        run: |
-          if [ "${{ inputs.environment }}" = "staging" ]; then
-            echo "build_command=dev" >> $GITHUB_OUTPUT
-          else 
-            echo "build_command=build" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Checkout du code
-        uses: actions/checkout@v3
-
-      - name: Cache des modules Node.js
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-
       - name: Configuration de la clé SSH
         uses: webfactory/ssh-agent@v0.5.3
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
-      - name: Déploiement et build
+      - name: Configuration des hôtes SSH connus
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
+
+      - name: Déploiement
         shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
-            source ~/.zshrc && \
-            cd $PROJECT_PATH && \
-            git pull"
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" << 'BASH'
+          set -euo pipefail
+          ROOT="$1"
+          BRANCH="$2"
+
+          git config --global --add safe.directory "$ROOT" || true
+          cd "$ROOT"
+
+          echo "📥 Récupération du code..."
+          git fetch --all --prune
+          git reset --hard "origin/${BRANCH}"
+
+          echo "✅ Déploiement terminé (reset sur origin/${BRANCH})"
+          BASH
 
   notify-success:
     if: success()
