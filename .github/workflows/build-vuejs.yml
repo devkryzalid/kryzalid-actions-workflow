@@ -58,14 +58,18 @@ jobs:
   build:
     needs: validate-secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
       - name: Set up SSH key
         uses: webfactory/ssh-agent@v0.5.3
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Configure SSH known hosts
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
 
       - name: Deploy, build and start server
         shell: bash
@@ -74,27 +78,72 @@ jobs:
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
-            export NVM_DIR=\"\$HOME/.nvm\" && \
-            [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\" && \
-            nvm use 16.20.2 > /dev/null && \
-            cd \$PROJECT_PATH && \
-            git pull && \
-            # Installer les dépendances si nécessaire
-            if [ ! -d 'node_modules' ] || [ -n \"\$(git diff HEAD^ HEAD -- package.json)\" ]; then npm ci; fi && \
-            # Créer le fichier .env.server pour le serveur Node.js uniquement
-            echo 'SERVER_ENV=${{ inputs.environment }}' > .env.server && \
-            echo 'PORT=3000' >> .env.server && \
-            echo 'CACHE_DURATION=300000' >> .env.server && \
-            # Construire l'application Vue.js avec le mode approprié
-            npm run build && \
-            # Assurer que la bonne version de pm2 est chargée et à jour
-            pm2 update && \
-            # Arrêter le serveur Node.js s'il est en cours d'exécution
-            pm2 stop kryzahub-server || true && \
-            # Démarrer/redémarrer le serveur Node.js avec PM2 et l'environnement correct
-            NODE_ENV=\"${{ inputs.environment == 'staging' && 'development' || 'production' }}\" pm2 start server/index.js --name kryzahub-server || \
-            NODE_ENV=\"${{ inputs.environment == 'staging' && 'development' || 'production' }}\" pm2 restart kryzahub-server"
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ inputs.environment }}" << 'BASH'
+          set -euo pipefail
+          PROJECT_PATH="$1"
+          ENVIRONMENT="$2"
+
+          # Chargement de nvm
+          if [ -s "$HOME/.nvm/nvm.sh" ]; then
+            . "$HOME/.nvm/nvm.sh"
+            nvm use 16.20.2 > /dev/null
+          fi
+
+          if ! command -v npm >/dev/null 2>&1; then
+            echo "❌ npm introuvable. Vérifiez l'installation de Node.js."
+            exit 1
+          fi
+          echo "Node: $(node -v) | npm: $(npm -v)"
+
+          cd "$PROJECT_PATH"
+
+          # Récupération du code
+          echo "📥 Récupération du code..."
+          git pull
+
+          # Installation des dépendances si nécessaire
+          if [ ! -d "node_modules" ] || [ -n "$(git diff HEAD^ HEAD -- package.json 2>/dev/null)" ]; then
+            echo "📦 Installation des dépendances..."
+            npm ci
+          else
+            echo "📦 Dépendances à jour, installation ignorée"
+          fi
+
+          # Création du fichier .env.server
+          echo "⚙️ Configuration .env.server..."
+          echo "SERVER_ENV=$ENVIRONMENT" > .env.server
+          echo "PORT=3000" >> .env.server
+          echo "CACHE_DURATION=300000" >> .env.server
+
+          # Build de l'application Vue.js
+          echo "🔨 Build en cours..."
+          npm run build
+
+          # Vérification que le build a produit des fichiers
+          if [ ! -d "dist" ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "❌ ERREUR: dist/ est vide ou n'existe pas après le build"
+            exit 1
+          fi
+          echo "✅ Build terminé"
+
+          # Gestion du serveur PM2
+          echo "🔄 Redémarrage du serveur PM2..."
+          pm2 update
+
+          if [ "$ENVIRONMENT" = "staging" ]; then
+            NODE_ENV_VALUE="development"
+          else
+            NODE_ENV_VALUE="production"
+          fi
+
+          pm2 stop kryzahub-server 2>/dev/null || true
+          NODE_ENV="$NODE_ENV_VALUE" pm2 start server/index.js --name kryzahub-server || \
+            NODE_ENV="$NODE_ENV_VALUE" pm2 restart kryzahub-server
+
+          echo "✅ Serveur PM2 démarré"
+          BASH
 
       - name: Verify server status
         shell: bash
@@ -102,11 +151,37 @@ jobs:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "\
-            export NVM_DIR=\"\$HOME/.nvm\" && \
-            [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\" && \
-            nvm use 16.20.2 > /dev/null && \
-            pm2 status"
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s << 'BASH'
+          set -euo pipefail
+
+          # Chargement de nvm
+          if [ -s "$HOME/.nvm/nvm.sh" ]; then
+            . "$HOME/.nvm/nvm.sh"
+            nvm use 16.20.2 > /dev/null
+          fi
+
+          echo "📊 Statut PM2 :"
+          pm2 status
+
+          # Vérification que le process est bien online
+          STATUS=$(pm2 jlist 2>/dev/null | python3 -c "
+          import sys, json
+          procs = json.load(sys.stdin)
+          for p in procs:
+              if p.get('name') == 'kryzahub-server':
+                  print(p.get('pm2_env', {}).get('status', 'unknown'))
+                  sys.exit(0)
+          print('not_found')
+          " 2>/dev/null || echo "unknown")
+
+          if [ "$STATUS" = "online" ]; then
+            echo "✅ kryzahub-server est online"
+          else
+            echo "⚠️ kryzahub-server statut: $STATUS"
+          fi
+          BASH
 
   notify:
     needs: build
