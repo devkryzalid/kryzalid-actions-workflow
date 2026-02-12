@@ -175,10 +175,18 @@ jobs:
             echo "⚠️ public/robots.txt non trouvé, étape ignorée"
           fi
 
-          # Copie de sitemap.xml uniquement sur la branche main
-          if [ "$BRANCH" = "main" ] && [ -f "www/sitemap.xml" ]; then
-            cp www/sitemap*.{xml,xsl} dist/
-            echo "✅ sitemap.xml copié dans dist/ (branche main)"
+          # Copie des fichiers sitemap* uniquement sur la branche main
+          if [ "$BRANCH" = "main" ]; then
+            # Copie de tous les fichiers sitemap*.xml
+            if ls www/sitemap*.xml 1> /dev/null 2>&1; then
+              cp www/sitemap*.xml dist/
+              echo "✅ Fichiers sitemap*.xml copiés dans dist/ (branche main)"
+            fi
+            # Copie des fichiers sitemap*.xsl s'ils existent
+            if ls www/sitemap*.xsl 1> /dev/null 2>&1; then
+              cp www/sitemap*.xsl dist/
+              echo "✅ Fichiers sitemap*.xsl copiés dans dist/ (branche main)"
+            fi
           fi
 
           # Rappel robots.txt en production
