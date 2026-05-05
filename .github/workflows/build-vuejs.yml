@@ -251,26 +251,31 @@ jobs:
         shell: bash
         env:
           COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
+          STACK_NAME: Vue.js
+          STACK_LOGO: https://vuejs.org/images/logo.png
         run: |
-          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
-            COLOR="#dc3545"; ICON="❌"; STATUS_TEXT="Échec"
+          IS_FAILURE="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+          [ "${{ inputs.environment }}" = "production" ] && IS_PROD="true" || IS_PROD="false"
+
+          if [ "$IS_FAILURE" = "true" ]; then
+            ICON="❌"
+            [ "$IS_PROD" = "true" ] && COLOR="#a01515" || COLOR="#d97706"
           else
-            COLOR="#36a64f"; ICON="✅"; STATUS_TEXT="Succès"
+            ICON="✅"
+            [ "$IS_PROD" = "true" ] && COLOR="#1d7e2a" || COLOR="#3ec55c"
           fi
-          if [ "${{ inputs.environment }}" = "production" ]; then
-            ENV_ICON="🚀"
-          else
-            ENV_ICON="🚧"
-          fi
+          [ "$IS_PROD" = "true" ] && ENV_LABEL="🚀 PRODUCTION" || ENV_LABEL="🚧 STAGING"
+
           DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
           COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
           {
             echo "color=$COLOR"
             echo "icon=$ICON"
-            echo "status_text=$STATUS_TEXT"
-            echo "env_icon=$ENV_ICON"
+            echo "env_label=$ENV_LABEL"
             echo "deploy_date=$DEPLOY_DATE"
             echo "commit_msg=$COMMIT_MSG"
+            echo "stack_name=$STACK_NAME"
+            echo "stack_logo=$STACK_LOGO"
           } >> "$GITHUB_OUTPUT"
 
       - name: Notification Slack
@@ -282,12 +287,14 @@ jobs:
             {
               "attachments": [{
                 "color": "${{ steps.meta.outputs.color }}",
+                "author_name": "${{ steps.meta.outputs.stack_name }}",
+                "author_icon": "${{ steps.meta.outputs.stack_logo }}",
                 "blocks": [
                   {
                     "type": "header",
                     "text": {
                       "type": "plain_text",
-                      "text": "${{ steps.meta.outputs.icon }} Vue.js — ${{ steps.meta.outputs.env_icon }} ${{ inputs.environment }} (${{ steps.meta.outputs.status_text }})",
+                      "text": "${{ steps.meta.outputs.icon }} ${{ steps.meta.outputs.env_label }}",
                       "emoji": true
                     }
                   },
