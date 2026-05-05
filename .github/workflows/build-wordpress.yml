@@ -30,6 +30,13 @@ on:
       SLACK_WEBHOOK_URL:
         required: true
 
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-wp-${{ inputs.environment }}-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   validate-secrets:
     runs-on: ubuntu-latest
@@ -60,23 +67,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Définition des variables d'environnement
+      - name: Définition du mode de build
         id: env
         shell: bash
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
-            echo "build_command=dev" >> $GITHUB_OUTPUT
-          else 
-            echo "build_command=build" >> $GITHUB_OUTPUT
+            echo "build_command=dev" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_command=build" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout du code
-        uses: actions/checkout@v3
-
       - name: Configuration de la clé SSH
-        uses: webfactory/ssh-agent@v0.5.3
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Configuration des hôtes SSH connus
+        shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
       - name: Déploiement et build
         shell: bash
@@ -88,7 +100,8 @@ jobs:
           BRANCH="${{ github.ref_name }}"
           MODE="${{ steps.env.outputs.build_command }}"  # "dev" en staging, "build" en prod
 
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$SSH_USER@$SERVER_HOST" \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
             bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" <<'BASH'
           set -euo pipefail
           ROOT="$1"     # racine du repo git
@@ -169,41 +182,78 @@ jobs:
           echo "✅ Déploiement terminé."
           BASH
 
-  notify-success:
-    if: success()
+  notify:
     needs: build
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Nettoyage du message de commit
-        id: clean_message
+      - name: Préparer les variables du message
+        id: meta
+        shell: bash
+        env:
+          COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
         run: |
-          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
-          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            COLOR="#dc3545"; ICON="❌"; STATUS_TEXT="Échec"
+          else
+            COLOR="#36a64f"; ICON="✅"; STATUS_TEXT="Succès"
+          fi
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            ENV_ICON="🚀"
+          else
+            ENV_ICON="🚧"
+          fi
+          DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
+          COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
+          {
+            echo "color=$COLOR"
+            echo "icon=$ICON"
+            echo "status_text=$STATUS_TEXT"
+            echo "env_icon=$ENV_ICON"
+            echo "deploy_date=$DEPLOY_DATE"
+            echo "commit_msg=$COMMIT_MSG"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Envoi de notification de succès à Slack
-        uses: slackapi/slack-github-action@v1.24.0
+      - name: Notification Slack
+        uses: slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0
         with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
             {
-              "text": "WORDPRESS - *${{ github.repository }}* \n\n *✅ Build réussi pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails de l'environnement:*\n• Environnement: *${{ inputs.environment }}*\n• Application: *${{ github.repository }}*\n• Dépôt: *${{ github.repository }}*\n• Branche: *${{ github.ref_name }}*\n• Déclenché par: *${{ github.actor }}*\n• Date de déploiement: *${{ env.deploy_date }}*\n• Timeout: *15 minutes*\n\n*Informations du commit:*\n• Message: ${{ env.clean_commit_message }}\n• Auteur: ${{ github.event.head_commit.author.name }}\n• Commit: <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir l'exécution du workflow>"
+              "attachments": [{
+                "color": "${{ steps.meta.outputs.color }}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.meta.outputs.icon }} WordPress — ${{ steps.meta.outputs.env_icon }} ${{ inputs.environment }} (${{ steps.meta.outputs.status_text }})",
+                      "emoji": true
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
+                      { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" },
+                      { "type": "mrkdwn", "text": "*Auteur*\n${{ github.event.head_commit.author.name }}" },
+                      { "type": "mrkdwn", "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "💬 _${{ steps.meta.outputs.commit_msg }}_"
+                    }
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "mrkdwn", "text": "📅 ${{ steps.meta.outputs.deploy_date }} • Lancé par ${{ github.actor }} • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Voir le run>" }
+                    ]
+                  }
+                ]
+              }]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-  notify-failure:
-    if: failure()
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Calcul de la date
-        run: echo "deploy_date=$(date '+%d/%m/%Y %H:%M')" >> $GITHUB_ENV
-
-      - name: Envoi de notification d'échec à Slack
-        uses: slackapi/slack-github-action@v1.24.0
-        with:
-          payload: |
-            {
-              "text": "WORDPRESS - *${{ github.repository }}* \n\n 🚨 *Déploiement échoué pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails de l'environnement:*\n• Environnement: *${{ inputs.environment }}*\n• Application: *${{ github.repository }}*\n• Dépôt: *${{ github.repository }}*\n• Branche: *${{ github.ref_name }}*\n• Déclenché par: *${{ github.actor }}*\n• Date de déploiement: *${{ env.deploy_date }}*\n• Job échoué: *build*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir l'exécution du workflow>"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
