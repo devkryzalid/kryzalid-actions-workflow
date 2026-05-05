@@ -217,6 +217,7 @@ jobs:
             echo "commit_msg=$COMMIT_MSG"
             echo "stack_name=$STACK_NAME"
             echo "stack_logo=$STACK_LOGO"
+            echo "sha_short=${GITHUB_SHA:0:7}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Notification Slack
@@ -245,7 +246,7 @@ jobs:
                       { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
                       { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" },
                       { "type": "mrkdwn", "text": "*Auteur*\n${{ github.event.head_commit.author.name }}" },
-                      { "type": "mrkdwn", "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" }
+                      { "type": "mrkdwn", "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|`${{ steps.meta.outputs.sha_short }}`>" }
                     ]
                   },
                   {
