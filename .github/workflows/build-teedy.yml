@@ -7,6 +7,11 @@ on:
         description: 'Target environment (staging or production)'
         required: true
         type: string
+      releases_to_keep:
+        description: 'Nombre de releases historiques à conserver côté serveur'
+        required: false
+        type: number
+        default: 5
     secrets:
       # Staging secrets
       SSH_PRIVATE_KEY_STAGING:
@@ -29,6 +34,13 @@ on:
       # Common secrets
       SLACK_WEBHOOK_URL:
         required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-teedy-${{ inputs.environment }}-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   validate-secrets:
@@ -58,32 +70,20 @@ jobs:
   build:
     needs: validate-secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18.20.4'
-
       - name: Set up SSH key
-        uses: webfactory/ssh-agent@v0.5.3
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Configure SSH known hosts
         shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
-
-      - name: Set locale and environment
-        shell: bash
-        run: |
-          sudo locale-gen en_US.UTF-8
-          echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
-          echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
       - name: Build application
         shell: bash
@@ -91,14 +91,51 @@ jobs:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
-          LANG: en_US.UTF-8
-          LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_HOST "export LANG=en_US.UTF-8 && export LC_ALL=en_US.UTF-8 && bash -l -c 'mkdir -p $PROJECT_PATH && cd $PROJECT_PATH && git pull && npm ci && if [ \"${{ inputs.environment }}\" = \"staging\" ]; then npm run build; else npm run build:prod; fi'"
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.environment }}" <<'BASH'
+          set -euo pipefail
+          PROJECT_PATH="$1"
+          BRANCH="$2"
+          ENVIRONMENT="$3"
 
-          if [ "${{ inputs.environment }}" = "production" ]; then
-            ssh $SSH_USER@$SERVER_HOST "echo '⚠️ Remember to verify robots.txt configuration for production environment'"
+          export LANG=en_US.UTF-8
+          export LC_ALL=en_US.UTF-8
+
+          # Chargement de nvm si disponible
+          if [ -s "$HOME/.nvm/nvm.sh" ]; then
+            . "$HOME/.nvm/nvm.sh"
           fi
+
+          mkdir -p "$PROJECT_PATH"
+          cd "$PROJECT_PATH"
+
+          # Récupération du code (reset --hard pour un état déterministe)
+          echo "📥 Récupération du code (reset --hard origin/${BRANCH})..."
+          git config --global --add safe.directory "$PROJECT_PATH" || true
+          git fetch --all --prune
+          git reset --hard "origin/${BRANCH}"
+
+          echo "📦 Installation des dépendances..."
+          npm ci
+
+          if [ "$ENVIRONMENT" = "staging" ]; then
+            echo "🔨 npm run build (staging)"
+            npm run build
+          else
+            echo "🔨 npm run build:prod (production)"
+            npm run build:prod
+            echo "⚠️ RAPPEL: Vérifiez la configuration de robots.txt pour la production"
+          fi
+
+          # Vérification du build
+          if [ ! -d "dist" ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "❌ ERREUR: dist/ est vide ou n'existe pas après le build"
+            exit 1
+          fi
+          echo "✅ Build terminé"
+          BASH
 
   deploy:
     needs: build
@@ -106,76 +143,149 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Set up SSH key
-        uses: webfactory/ssh-agent@v0.5.3
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Configure SSH known hosts
         shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
-      - name: Deploy to server
+      - name: Déploiement atomique (releases + symlink)
         shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
-          LANG: en_US.UTF-8
-          LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" << 'BASH'
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.releases_to_keep }}" <<'BASH'
           set -euo pipefail
           PROJECT_PATH="$1"
           BRANCH="$2"
+          RELEASES_TO_KEEP="$3"
 
           cd "$PROJECT_PATH"
 
-          # Vérification et création des répertoires nécessaires
-          mkdir -p www dist
-
-          # Vérification que dist/ n'est pas vide avant le déploiement
-          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+          if [ ! -d "dist" ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
             echo "❌ ERREUR: dist/ est vide. Déploiement annulé."
             exit 1
           fi
 
-          # Préservation du sitemap.xml (branche main uniquement)
-          if [ "$BRANCH" = "main" ] && [ -f "www/sitemap.xml" ]; then
-            cp www/sitemap.xml dist/
-            echo "✅ sitemap.xml préservé de www/ vers dist/"
+          mkdir -p releases
+          RELEASE_NAME="$(date +%Y%m%d-%H%M%S)"
+          RELEASE_PATH="releases/$RELEASE_NAME"
+
+          # Préservation du sitemap depuis la release courante (uniquement main)
+          if [ "$BRANCH" = "main" ]; then
+            CURRENT="$(readlink -f www 2>/dev/null || true)"
+            if [ -n "$CURRENT" ] && [ -f "$CURRENT/sitemap.xml" ] && [ ! -f "dist/sitemap.xml" ]; then
+              cp "$CURRENT/sitemap.xml" dist/
+              echo "✅ sitemap.xml préservé depuis $CURRENT"
+            fi
           fi
 
-          # Swap des répertoires : www -> wwwbkp, dist -> www
-          echo "🔄 Déploiement en cours..."
-          rm -rf wwwbkp
-          mv www wwwbkp
-          mv dist www
+          mv dist "$RELEASE_PATH"
+          echo "📦 Nouvelle release : $RELEASE_PATH"
 
-          echo "✅ Déploiement terminé avec succès"
+          echo "🔄 Activation de la release..."
+          if [ -L "www" ] || [ ! -e "www" ]; then
+            ln -sfn "$RELEASE_PATH" www-new
+            mv -Tf www-new www
+          else
+            BACKUP="wwwbkp-legacy-$(date +%Y%m%d-%H%M%S)"
+            echo "🆙 Migration legacy → symlink (www déplacé vers $BACKUP)"
+            mv www "$BACKUP"
+            ln -sfn "$RELEASE_PATH" www
+          fi
+          echo "✅ www → $RELEASE_PATH"
+
+          # Rotation des releases
+          KEEP="${RELEASES_TO_KEEP:-5}"
+          OLD=$(ls -1dt releases/*/ 2>/dev/null | tail -n +"$((KEEP + 1))" || true)
+          if [ -n "$OLD" ]; then
+            echo "$OLD" | xargs -r rm -rf
+            echo "🧹 Anciennes releases purgées (gardé $KEEP)"
+          fi
           BASH
 
   notify:
     needs: [build, deploy]
-    runs-on: ubuntu-latest
     if: always()
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean commit message
-        id: clean_message
+      - name: Préparer les variables du message
+        id: meta
         shell: bash
+        env:
+          COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
         run: |
-          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
-          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            COLOR="#dc3545"; ICON="❌"; STATUS_TEXT="Échec"
+          else
+            COLOR="#36a64f"; ICON="✅"; STATUS_TEXT="Succès"
+          fi
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            ENV_ICON="🚀"
+          else
+            ENV_ICON="🚧"
+          fi
+          DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
+          COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
+          {
+            echo "color=$COLOR"
+            echo "icon=$ICON"
+            echo "status_text=$STATUS_TEXT"
+            echo "env_icon=$ENV_ICON"
+            echo "deploy_date=$DEPLOY_DATE"
+            echo "commit_msg=$COMMIT_MSG"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Send notification to Slack
-        uses: slackapi/slack-github-action@v1.24.0
+      - name: Notification Slack
+        uses: slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0
         with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
             {
-              "text": "Teedy front-end - *${{ needs.build.result == 'success' && needs.deploy.result == 'success' && '✅ Build & Deploy Success for ' || '❌ Build or Deploy Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
+              "attachments": [{
+                "color": "${{ steps.meta.outputs.color }}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.meta.outputs.icon }} Teedy front — ${{ steps.meta.outputs.env_icon }} ${{ inputs.environment }} (${{ steps.meta.outputs.status_text }})",
+                      "emoji": true
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
+                      { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" },
+                      { "type": "mrkdwn", "text": "*Auteur*\n${{ github.event.head_commit.author.name }}" },
+                      { "type": "mrkdwn", "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "💬 _${{ steps.meta.outputs.commit_msg }}_"
+                    }
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "mrkdwn", "text": "📅 ${{ steps.meta.outputs.deploy_date }} • Lancé par ${{ github.actor }} • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Voir le run>" }
+                    ]
+                  }
+                ]
+              }]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
