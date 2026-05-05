@@ -7,6 +7,16 @@ on:
         description: "Environnement cible (staging ou production)"
         required: true
         type: string
+      node_version:
+        description: "Version Node.js utilisée pour le build (sur le runner GHA)"
+        required: false
+        type: string
+        default: "16.14.0"
+      releases_to_keep:
+        description: "Nombre de releases historiques à conserver côté serveur"
+        required: false
+        type: number
+        default: 5
     secrets:
       # Secrets de staging
       SSH_PRIVATE_KEY_STAGING:
@@ -30,11 +40,19 @@ on:
       SLACK_WEBHOOK_URL:
         required: true
 
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-eclosion-${{ inputs.environment }}-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   validate-secrets:
     runs-on: ubuntu-latest
     steps:
       - name: Vérification des secrets requis
+        shell: bash
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
@@ -59,73 +77,82 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout du code
-        uses: actions/checkout@v3
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Vérification des fichiers
         id: check_files
+        shell: bash
         run: |
           missing_files=""
-          if [ ! -f ".browserslistrc" ]; then
-            missing_files+=".browserslistrc "
-          fi
-          if [ ! -f ".eslintrc.json" ]; then
-            missing_files+=".eslintrc.json "
-          fi
-          echo "missing_files=$missing_files" >> $GITHUB_ENV
+          [ -f ".browserslistrc" ] || missing_files+=".browserslistrc "
+          [ -f ".eslintrc.json" ] || missing_files+=".eslintrc.json "
+          echo "missing_files=$missing_files" >> "$GITHUB_OUTPUT"
 
       - name: Notification Slack pour fichiers manquants
-        if: env.missing_files != ''
-        uses: slackapi/slack-github-action@v1.24.0
+        if: steps.check_files.outputs.missing_files != ''
+        uses: slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0
         with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
             {
-              "text": "ANGULAR - *${{ github.repository }}* \n\n ⚠️ *Attention: Fichiers de configuration manquants*\n\n*Fichiers manquants:* ${{ env.missing_files }}\n\n*Détails:*\n• Branche: *${{ github.ref_name }}*\n• Dépôt: *${{ github.repository }}*\n\nVeuillez ajouter ces fichiers pour assurer une configuration correcte du projet."
+              "attachments": [{
+                "color": "#f0ad4e",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "⚠️ Angular — Fichiers de configuration manquants",
+                      "emoji": true
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
+                      { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Fichiers manquants :* `${{ steps.check_files.outputs.missing_files }}`\n\nMerci d'ajouter ces fichiers pour assurer une configuration correcte du projet."
+                    }
+                  }
+                ]
+              }]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   build:
     needs: validate-secrets
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout du code
-        uses: actions/checkout@v3
-
-      - name: Configuration de Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: "16.14.0"
-
       - name: Configuration de la clé SSH
-        uses: webfactory/ssh-agent@v0.5.3
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Configuration des hôtes SSH connus
+        shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
-      - name: Configuration des paramètres régionaux et de l'environnement
-        shell: bash
-        run: |
-          sudo locale-gen en_US.UTF-8
-          echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
-          echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
-
-      - name: Build du projet
+      - name: Build du projet (sur le serveur cible)
         shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
-          LANG: en_US.UTF-8
-          LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.environment }}" << 'BASH'
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.environment }}" <<'BASH'
           set -euo pipefail
           PROJECT_PATH="$1"
           BRANCH="$2"
@@ -136,13 +163,14 @@ jobs:
             . "$HOME/.nvm/nvm.sh"
           fi
 
-          # Création et accès au répertoire du projet
           mkdir -p "$PROJECT_PATH"
           cd "$PROJECT_PATH"
 
-          # Récupération du code
-          echo "📥 Récupération du code..."
-          git pull
+          # Récupération du code (reset --hard pour un état déterministe)
+          echo "📥 Récupération du code (reset --hard origin/${BRANCH})..."
+          git config --global --add safe.directory "$PROJECT_PATH" || true
+          git fetch --all --prune
+          git reset --hard "origin/${BRANCH}"
 
           # Installation des dépendances
           echo "📦 Installation des dépendances..."
@@ -159,33 +187,19 @@ jobs:
           fi
           echo "✅ dist/ contient des fichiers"
 
-          # Copie de .htaccess
-          if [ -f "public/.htaccess" ]; then
-            cp public/.htaccess dist/
-            echo "✅ .htaccess copié dans dist/"
-          else
-            echo "⚠️ public/.htaccess non trouvé, étape ignorée"
-          fi
+          # Copie des fichiers statiques
+          [ -f "public/.htaccess" ]   && cp public/.htaccess   dist/ && echo "✅ .htaccess copié"
+          [ -f "public/robots.txt" ]  && cp public/robots.txt  dist/ && echo "✅ robots.txt copié"
 
-          # Copie de robots.txt
-          if [ -f "public/robots.txt" ]; then
-            cp public/robots.txt dist/
-            echo "✅ robots.txt copié dans dist/"
-          else
-            echo "⚠️ public/robots.txt non trouvé, étape ignorée"
-          fi
-
-          # Copie des fichiers sitemap* uniquement sur la branche main
+          # Copie des sitemaps uniquement sur main, depuis la release courante (suit le symlink)
           if [ "$BRANCH" = "main" ]; then
-            # Copie de tous les fichiers sitemap*.xml
-            if ls www/sitemap*.xml 1> /dev/null 2>&1; then
-              cp www/sitemap*.xml dist/
-              echo "✅ Fichiers sitemap*.xml copiés dans dist/ (branche main)"
-            fi
-            # Copie des fichiers sitemap*.xsl s'ils existent
-            if ls www/sitemap*.xsl 1> /dev/null 2>&1; then
-              cp www/sitemap*.xsl dist/
-              echo "✅ Fichiers sitemap*.xsl copiés dans dist/ (branche main)"
+            CURRENT="$(readlink -f www 2>/dev/null || true)"
+            if [ -n "$CURRENT" ] && [ -d "$CURRENT" ]; then
+              shopt -s nullglob
+              for f in "$CURRENT"/sitemap*.xml "$CURRENT"/sitemap*.xsl; do
+                cp "$f" dist/ && echo "✅ $(basename "$f") copié dans dist/"
+              done
+              shopt -u nullglob
             fi
           fi
 
@@ -203,91 +217,148 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Configuration de la clé SSH
-        uses: webfactory/ssh-agent@v0.5.3
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Configuration des hôtes SSH connus
+        shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
-      - name: Déploiement du projet
+      - name: Déploiement atomique (releases + symlink)
         shell: bash
         env:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
-          LANG: en_US.UTF-8
-          LC_ALL: en_US.UTF-8
         run: |
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" << 'BASH'
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.releases_to_keep }}" <<'BASH'
           set -euo pipefail
           PROJECT_PATH="$1"
           BRANCH="$2"
+          RELEASES_TO_KEEP="$3"
 
           cd "$PROJECT_PATH"
 
-          # Vérification et création des répertoires nécessaires
-          mkdir -p www dist
-
-          # Vérification que dist/ n'est pas vide avant le déploiement
-          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+          # --- Validation pré-déploiement ---
+          if [ ! -d "dist" ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
             echo "❌ ERREUR: dist/ est vide. Déploiement annulé."
             exit 1
           fi
 
-          # Préservation du sitemap.xml (branche main uniquement)
-          if [ "$BRANCH" = "main" ] && [ -f "www/sitemap.xml" ]; then
-            cp www/sitemap.xml dist/
-            echo "✅ sitemap.xml préservé de www/ vers dist/"
+          mkdir -p releases
+          RELEASE_NAME="$(date +%Y%m%d-%H%M%S)"
+          RELEASE_PATH="releases/$RELEASE_NAME"
+
+          # Note : la préservation des sitemaps depuis la release courante est
+          # déjà faite par le job `build` (cf. boucle sur sitemap*.xml/xsl).
+
+          # --- Promotion de dist/ en nouvelle release ---
+          mv dist "$RELEASE_PATH"
+          echo "📦 Nouvelle release : $RELEASE_PATH"
+
+          # --- Swap atomique du symlink www → release ---
+          echo "🔄 Activation de la release..."
+          if [ -L "www" ] || [ ! -e "www" ]; then
+            # Mode normal : swap atomique (ln -sfn est atomique sur même fs)
+            ln -sfn "$RELEASE_PATH" www-new
+            mv -Tf www-new www
+          else
+            # Migration unique depuis l'ancien mode (www = dossier réel)
+            BACKUP="wwwbkp-legacy-$(date +%Y%m%d-%H%M%S)"
+            echo "🆙 Migration legacy → symlink (www déplacé vers $BACKUP)"
+            mv www "$BACKUP"
+            ln -sfn "$RELEASE_PATH" www
           fi
+          echo "✅ www → $RELEASE_PATH"
 
-          # Swap des répertoires : www -> wwwbkp, dist -> www
-          echo "🔄 Déploiement en cours..."
-          rm -rf wwwbkp
-          mv www wwwbkp
-          mv dist www
-
-          echo "✅ Déploiement terminé avec succès"
+          # --- Rotation des releases (garder N dernières) ---
+          KEEP="${RELEASES_TO_KEEP:-5}"
+          OLD=$(ls -1dt releases/*/ 2>/dev/null | tail -n +"$((KEEP + 1))" || true)
+          if [ -n "$OLD" ]; then
+            echo "$OLD" | xargs -r rm -rf
+            echo "🧹 Anciennes releases purgées (gardé $KEEP)"
+          fi
           BASH
 
-  notify-success:
-    if: success()
+  notify:
     needs: [build, deploy]
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Nettoyage du message de commit
+      - name: Préparer les variables du message
+        id: meta
+        shell: bash
+        env:
+          COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
         run: |
-          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
-          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            COLOR="#dc3545"; ICON="❌"; STATUS_TEXT="Échec"
+          else
+            COLOR="#36a64f"; ICON="✅"; STATUS_TEXT="Succès"
+          fi
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            ENV_ICON="🚀"
+          else
+            ENV_ICON="🚧"
+          fi
+          DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
+          COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
+          {
+            echo "color=$COLOR"
+            echo "icon=$ICON"
+            echo "status_text=$STATUS_TEXT"
+            echo "env_icon=$ENV_ICON"
+            echo "deploy_date=$DEPLOY_DATE"
+            echo "commit_msg=$COMMIT_MSG"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Notification de succès sur Slack
-        uses: slackapi/slack-github-action@v1.24.0
+      - name: Notification Slack
+        uses: slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0
         with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
             {
-              "text": "ANGULAR - *${{ github.repository }}* \n\n *✅ Build et déploiement réussis pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails :*\n• Environnement : *${{ inputs.environment }}*\n• Dépôt : *${{ github.repository }}*\n• Branche : *${{ github.ref_name }}*\n• Déclenché par : *${{ github.actor }}*\n• Date : *${{ env.deploy_date }}*\n\n\n*Commit :*\n• Message : ${{ env.clean_commit_message }}\n• Auteur : ${{ github.event.head_commit.author.name }}\n• Commit : <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>"
+              "attachments": [{
+                "color": "${{ steps.meta.outputs.color }}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.meta.outputs.icon }} Angular — ${{ steps.meta.outputs.env_icon }} ${{ inputs.environment }} (${{ steps.meta.outputs.status_text }})",
+                      "emoji": true
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
+                      { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" },
+                      { "type": "mrkdwn", "text": "*Auteur*\n${{ github.event.head_commit.author.name }}" },
+                      { "type": "mrkdwn", "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "💬 _${{ steps.meta.outputs.commit_msg }}_"
+                    }
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "mrkdwn", "text": "📅 ${{ steps.meta.outputs.deploy_date }} • Lancé par ${{ github.actor }} • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Voir le run>" }
+                    ]
+                  }
+                ]
+              }]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-  notify-failure:
-    if: failure()
-    needs: [build, deploy]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Calcul de la date
-        run: echo "deploy_date=$(date '+%d/%m/%Y %H:%M')" >> $GITHUB_ENV
-
-      - name: Notification d'échec sur Slack
-        uses: slackapi/slack-github-action@v1.24.0
-        with:
-          payload: |
-            {
-              "text": "ANGULAR - *${{ github.repository }}* \n\n 🚨 *Échec du déploiement pour l'environnement ${{ inputs.environment == 'staging' && ':construction:' || ':rocket:' }} ${{ inputs.environment }}*\n\n*Détails :*\n• Environnement : *${{ inputs.environment }}*\n• Dépôt : *${{ github.repository }}*\n• Branche : *${{ github.ref_name }}*\n• Déclenché par : *${{ github.actor }}*\n• Date : *${{ env.deploy_date }}*\n• Job échoué : *build/deploy*\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 Voir le workflow>"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
