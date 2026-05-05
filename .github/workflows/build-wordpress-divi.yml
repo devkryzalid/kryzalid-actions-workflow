@@ -152,9 +152,14 @@ jobs:
             {
               "attachments": [{
                 "color": "${{ steps.meta.outputs.color }}",
-                "author_name": "${{ steps.meta.outputs.stack_name }}",
-                "author_icon": "${{ steps.meta.outputs.stack_logo }}",
                 "blocks": [
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "image", "image_url": "${{ steps.meta.outputs.stack_logo }}", "alt_text": "${{ steps.meta.outputs.stack_name }}" },
+                      { "type": "mrkdwn", "text": "*${{ steps.meta.outputs.stack_name }}*" }
+                    ]
+                  },
                   {
                     "type": "header",
                     "text": {

@@ -99,9 +99,14 @@ jobs:
             {
               "attachments": [{
                 "color": "#f0ad4e",
-                "author_name": "Angular",
-                "author_icon": "https://angular.io/assets/images/logos/angular/angular.png",
                 "blocks": [
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "image", "image_url": "https://angular.io/assets/images/logos/angular/angular.png", "alt_text": "Angular" },
+                      { "type": "mrkdwn", "text": "*Angular*" }
+                    ]
+                  },
                   {
                     "type": "header",
                     "text": {
@@ -338,9 +343,14 @@ jobs:
             {
               "attachments": [{
                 "color": "${{ steps.meta.outputs.color }}",
-                "author_name": "${{ steps.meta.outputs.stack_name }}",
-                "author_icon": "${{ steps.meta.outputs.stack_logo }}",
                 "blocks": [
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "image", "image_url": "${{ steps.meta.outputs.stack_logo }}", "alt_text": "${{ steps.meta.outputs.stack_name }}" },
+                      { "type": "mrkdwn", "text": "*${{ steps.meta.outputs.stack_name }}*" }
+                    ]
+                  },
                   {
                     "type": "header",
                     "text": {
