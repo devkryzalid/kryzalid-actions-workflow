@@ -7,6 +7,26 @@ on:
         description: 'Target environment (staging or production)'
         required: true
         type: string
+      node_version:
+        description: 'Node.js version to use via nvm (e.g. 16.20.2, 20.18.0)'
+        required: false
+        type: string
+        default: '16.20.2'
+      pm2_app_name:
+        description: 'Nom du process PM2 à (re)démarrer'
+        required: false
+        type: string
+        default: 'kryzahub-server'
+      pm2_entrypoint:
+        description: 'Chemin du fichier d''entrée Node lancé par PM2'
+        required: false
+        type: string
+        default: 'server/index.js'
+      server_port:
+        description: 'Port HTTP exposé par le serveur Node'
+        required: false
+        type: string
+        default: '3000'
     secrets:
       # Staging secrets
       SSH_PRIVATE_KEY_STAGING:
@@ -29,6 +49,13 @@ on:
       # Common secrets
       SLACK_WEBHOOK_URL:
         required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-vuejs-${{ inputs.environment }}-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   validate-secrets:
@@ -61,15 +88,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Set up SSH key
-        uses: webfactory/ssh-agent@v0.5.3
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
 
       - name: Configure SSH known hosts
         shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy, build and start server
         shell: bash
@@ -78,17 +107,29 @@ jobs:
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "${{ inputs.environment }}" << 'BASH'
+            bash -s -- \
+              "$PROJECT_PATH" \
+              "${{ github.ref_name }}" \
+              "${{ inputs.environment }}" \
+              "${{ inputs.node_version }}" \
+              "${{ inputs.pm2_app_name }}" \
+              "${{ inputs.pm2_entrypoint }}" \
+              "${{ inputs.server_port }}" <<'BASH'
           set -euo pipefail
           PROJECT_PATH="$1"
-          ENVIRONMENT="$2"
+          BRANCH="$2"
+          ENVIRONMENT="$3"
+          NODE_VERSION="$4"
+          PM2_APP="$5"
+          PM2_ENTRY="$6"
+          SERVER_PORT="$7"
 
           # Chargement de nvm
           if [ -s "$HOME/.nvm/nvm.sh" ]; then
             . "$HOME/.nvm/nvm.sh"
-            nvm use 16.20.2 > /dev/null
+            nvm use "$NODE_VERSION" > /dev/null
           fi
 
           if ! command -v npm >/dev/null 2>&1; then
@@ -97,25 +138,32 @@ jobs:
           fi
           echo "Node: $(node -v) | npm: $(npm -v)"
 
+          git config --global --add safe.directory "$PROJECT_PATH" || true
           cd "$PROJECT_PATH"
 
-          # Récupération du code
-          echo "📥 Récupération du code..."
-          git pull
+          # Récupération du code (reset --hard pour un état déterministe)
+          echo "📥 Récupération du code (reset --hard origin/${BRANCH})..."
+          git fetch --all --prune
+          git reset --hard "origin/${BRANCH}"
 
-          # Installation des dépendances si nécessaire
-          if [ ! -d "node_modules" ] || [ -n "$(git diff HEAD^ HEAD -- package.json 2>/dev/null)" ]; then
-            echo "📦 Installation des dépendances..."
+          # Installation des dépendances : toujours npm ci (déterministe et rapide
+          # avec un cache npm chaud — la détection précédente sur diff HEAD^ HEAD
+          # était cassée sur rebase/cherry-pick).
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            echo "📦 npm ci"
             npm ci
           else
-            echo "📦 Dépendances à jour, installation ignorée"
+            echo "⚠️  Aucun lockfile → npm install"
+            npm install
           fi
 
           # Création du fichier .env.server
           echo "⚙️ Configuration .env.server..."
-          echo "SERVER_ENV=$ENVIRONMENT" > .env.server
-          echo "PORT=3000" >> .env.server
-          echo "CACHE_DURATION=300000" >> .env.server
+          {
+            echo "SERVER_ENV=$ENVIRONMENT"
+            echo "PORT=$SERVER_PORT"
+            echo "CACHE_DURATION=300000"
+          } > .env.server
 
           # Build de l'application Vue.js
           echo "🔨 Build en cours..."
@@ -128,19 +176,21 @@ jobs:
           fi
           echo "✅ Build terminé"
 
-          # Gestion du serveur PM2
-          echo "🔄 Redémarrage du serveur PM2..."
-          pm2 update
-
+          # Détermination de NODE_ENV
           if [ "$ENVIRONMENT" = "staging" ]; then
             NODE_ENV_VALUE="development"
           else
             NODE_ENV_VALUE="production"
           fi
 
-          pm2 stop kryzahub-server 2>/dev/null || true
-          NODE_ENV="$NODE_ENV_VALUE" pm2 start server/index.js --name kryzahub-server || \
-            NODE_ENV="$NODE_ENV_VALUE" pm2 restart kryzahub-server
+          # Reload (zero-downtime) si le process existe, sinon start.
+          # On évite `pm2 update` qui redémarre TOUS les processus PM2 du serveur.
+          echo "🔄 (Re)démarrage PM2 de $PM2_APP..."
+          if pm2 describe "$PM2_APP" >/dev/null 2>&1; then
+            NODE_ENV="$NODE_ENV_VALUE" pm2 reload "$PM2_APP" --update-env
+          else
+            NODE_ENV="$NODE_ENV_VALUE" pm2 start "$PM2_ENTRY" --name "$PM2_APP"
+          fi
 
           echo "✅ Serveur PM2 démarré"
           BASH
@@ -151,56 +201,118 @@ jobs:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s << 'BASH'
+            bash -s -- "${{ inputs.node_version }}" "${{ inputs.pm2_app_name }}" <<'BASH'
           set -euo pipefail
+          NODE_VERSION="$1"
+          PM2_APP="$2"
 
-          # Chargement de nvm
           if [ -s "$HOME/.nvm/nvm.sh" ]; then
             . "$HOME/.nvm/nvm.sh"
-            nvm use 16.20.2 > /dev/null
+            nvm use "$NODE_VERSION" > /dev/null
           fi
 
           echo "📊 Statut PM2 :"
           pm2 status
 
-          # Vérification que le process est bien online
-          STATUS=$(pm2 jlist 2>/dev/null | python3 -c "
-          import sys, json
-          procs = json.load(sys.stdin)
-          for p in procs:
-              if p.get('name') == 'kryzahub-server':
-                  print(p.get('pm2_env', {}).get('status', 'unknown'))
-                  sys.exit(0)
-          print('not_found')
-          " 2>/dev/null || echo "unknown")
+          # Parse le status sans dépendre de python : pm2 jlist | jq
+          STATUS="unknown"
+          if command -v jq >/dev/null 2>&1; then
+            STATUS=$(pm2 jlist 2>/dev/null \
+              | jq -r --arg name "$PM2_APP" '.[] | select(.name==$name) | .pm2_env.status' \
+              | head -n1)
+          else
+            # Fallback : grep brut sur la ligne du process
+            STATUS=$(pm2 jlist 2>/dev/null \
+              | tr ',' '\n' \
+              | grep -A1 "\"name\":\"$PM2_APP\"" \
+              | grep '"status"' \
+              | head -n1 \
+              | sed 's/.*"status":"\([^"]*\)".*/\1/')
+          fi
+          STATUS="${STATUS:-not_found}"
 
           if [ "$STATUS" = "online" ]; then
-            echo "✅ kryzahub-server est online"
+            echo "✅ $PM2_APP est online"
           else
-            echo "⚠️ kryzahub-server statut: $STATUS"
+            echo "❌ $PM2_APP statut: $STATUS"
+            exit 1
           fi
           BASH
 
   notify:
     needs: build
-    runs-on: ubuntu-latest
     if: always()
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean commit message
-        id: clean_message
+      - name: Préparer les variables du message
+        id: meta
         shell: bash
+        env:
+          COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
         run: |
-          CLEAN_COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed ':a;N;$!ba;s/\n/ /g' | sed 's/"/\\"/g')
-          echo "clean_commit_message=$CLEAN_COMMIT_MESSAGE" >> $GITHUB_ENV
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            COLOR="#dc3545"; ICON="❌"; STATUS_TEXT="Échec"
+          else
+            COLOR="#36a64f"; ICON="✅"; STATUS_TEXT="Succès"
+          fi
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            ENV_ICON="🚀"
+          else
+            ENV_ICON="🚧"
+          fi
+          DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
+          COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
+          {
+            echo "color=$COLOR"
+            echo "icon=$ICON"
+            echo "status_text=$STATUS_TEXT"
+            echo "env_icon=$ENV_ICON"
+            echo "deploy_date=$DEPLOY_DATE"
+            echo "commit_msg=$COMMIT_MSG"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Send notification to Slack
-        uses: slackapi/slack-github-action@v1.24.0
+      - name: Notification Slack
+        uses: slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0
         with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
             {
-              "text": "VUE.JS & STATUS SERVER - *${{ needs.build.result == 'success' && '✅ Build Success for ' || '❌ Build Failed for ' }}${{ inputs.environment }} environment*\n\n*Environment Details:*\n• Environment: *${{ inputs.environment }}*\n• Repository: *${{ github.repository }}*\n• Branch: *${{ github.ref_name }}*\n\n*Commit Information:*\n• Message: ${{ env.clean_commit_message }}\n• Author: ${{ github.event.head_commit.author.name }}\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔍 View Workflow Run>"
+              "attachments": [{
+                "color": "${{ steps.meta.outputs.color }}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.meta.outputs.icon }} Vue.js — ${{ steps.meta.outputs.env_icon }} ${{ inputs.environment }} (${{ steps.meta.outputs.status_text }})",
+                      "emoji": true
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
+                      { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" },
+                      { "type": "mrkdwn", "text": "*Auteur*\n${{ github.event.head_commit.author.name }}" },
+                      { "type": "mrkdwn", "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "💬 _${{ steps.meta.outputs.commit_msg }}_"
+                    }
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "mrkdwn", "text": "📅 ${{ steps.meta.outputs.deploy_date }} • Lancé par ${{ github.actor }} • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Voir le run>" }
+                    ]
+                  }
+                ]
+              }]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
