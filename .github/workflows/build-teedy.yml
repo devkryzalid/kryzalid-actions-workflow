@@ -225,7 +225,7 @@ jobs:
         env:
           COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
           STACK_NAME: Teedy front
-          STACK_LOGO: https://teedy.io/img/logo.png
+          STACK_LOGO: https://raw.githubusercontent.com/devkryzalid/kryzalid-actions-workflow/main/.github/assets/teedy-logo.png
         run: |
           IS_FAILURE="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
           [ "${{ inputs.environment }}" = "production" ] && IS_PROD="true" || IS_PROD="false"
