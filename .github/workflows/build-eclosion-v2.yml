@@ -1,0 +1,424 @@
+name: Build et Déploiement Projet Angular (v2)
+
+# v2 — Différences par rapport à build-eclosion.yml :
+#   - Node 22.17.1 par défaut (LTS active, compatible Angular 21+)
+#   - Build via "npm run build" (suppose que angular.json a
+#     defaultConfiguration: "production" sur le target build)
+#   - check-files vérifie eslint.config.js (flat config) au lieu de .eslintrc.json
+#   - input optionnel lint_before_build pour exécuter "npm run lint" sur le
+#     serveur avant le build
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Environnement cible (staging ou production)"
+        required: true
+        type: string
+      node_version:
+        description: "Version Node.js utilisée pour le build (sur le serveur cible)"
+        required: false
+        type: string
+        default: "22.17.1"
+      releases_to_keep:
+        description: "Nombre de releases historiques à conserver côté serveur"
+        required: false
+        type: number
+        default: 5
+      lint_before_build:
+        description: "Exécuter 'npm run lint' avant le build pour bloquer un déploiement si le lint échoue"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      # Secrets de staging
+      SSH_PRIVATE_KEY_STAGING:
+        required: false
+      SSH_USER_STAGING:
+        required: false
+      SERVER_HOST_STAGING:
+        required: false
+      PROJECT_PATH_STAGING:
+        required: false
+      # Secrets de production
+      SSH_PRIVATE_KEY_PROD:
+        required: false
+      SSH_USER_PROD:
+        required: false
+      SERVER_HOST_PROD:
+        required: false
+      PROJECT_PATH_PROD:
+        required: false
+      # Secrets communs
+      SLACK_WEBHOOK_URL:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-eclosion-v2-${{ inputs.environment }}-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  validate-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérification des secrets requis
+        shell: bash
+        run: |
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
+               [ -z "${{ secrets.SSH_USER_STAGING }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_STAGING }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_STAGING }}" ]; then
+              echo "Secrets de staging manquants"
+              exit 1
+            fi
+          else
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_PROD }}" ] || \
+               [ -z "${{ secrets.SSH_USER_PROD }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_PROD }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_PROD }}" ]; then
+              echo "Secrets de production manquants"
+              exit 1
+            fi
+          fi
+
+  check-files:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Vérification des fichiers
+        id: check_files
+        shell: bash
+        run: |
+          missing_files=""
+          [ -f ".browserslistrc" ] || missing_files+=".browserslistrc "
+          [ -f "eslint.config.js" ] || [ -f "eslint.config.cjs" ] || [ -f "eslint.config.mjs" ] || missing_files+="eslint.config.js (flat config) "
+          [ -f "tsconfig.json" ] || missing_files+="tsconfig.json "
+          echo "missing_files=$missing_files" >> "$GITHUB_OUTPUT"
+
+      - name: Notification Slack pour fichiers manquants
+        if: steps.check_files.outputs.missing_files != ''
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          errors: true
+          payload: |
+            {
+              "attachments": [{
+                "color": "#f0ad4e",
+                "blocks": [
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "image", "image_url": "https://angular.io/assets/images/logos/angular/angular.png", "alt_text": "Angular" },
+                      { "type": "mrkdwn", "text": "*Angular*" }
+                    ]
+                  },
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "⚠️ Fichiers de configuration manquants",
+                      "emoji": true
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
+                      { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Fichiers manquants :* `${{ steps.check_files.outputs.missing_files }}`\n\nMerci d'ajouter ces fichiers pour assurer une configuration correcte du projet."
+                    }
+                  }
+                ]
+              }]
+            }
+
+  build:
+    needs: validate-secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Configuration de la clé SSH
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Configuration des hôtes SSH connus
+        shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Build du projet (sur le serveur cible)
+        shell: bash
+        env:
+          SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+          PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.environment }}" "${{ inputs.node_version }}" "${{ inputs.lint_before_build }}" <<'BASH'
+          set -euo pipefail
+          PROJECT_PATH="$1"
+          BRANCH="$2"
+          ENVIRONMENT="$3"
+          NODE_VERSION="$4"
+          LINT_BEFORE_BUILD="$5"
+
+          # Chargement de nvm et activation de la version Node demandée
+          if [ -s "$HOME/.nvm/nvm.sh" ]; then
+            . "$HOME/.nvm/nvm.sh"
+            nvm use "$NODE_VERSION" 2>&1 || nvm install "$NODE_VERSION"
+          else
+            echo "❌ ERREUR: nvm introuvable (\$HOME/.nvm/nvm.sh manquant). Node 22 requis pour Angular 21+ — installez nvm sur le serveur."
+            exit 1
+          fi
+
+          # Garde : la version active doit matcher exactement la demande
+          ACTUAL_NODE="$(node -v 2>/dev/null || echo none)"
+          if [ "$ACTUAL_NODE" != "v${NODE_VERSION}" ]; then
+            echo "❌ ERREUR: Node attendu v${NODE_VERSION}, actif ${ACTUAL_NODE}. nvm use/install a probablement échoué."
+            exit 1
+          fi
+          echo "ℹ️  Node $(node -v) / npm $(npm -v)"
+
+          mkdir -p "$PROJECT_PATH"
+          cd "$PROJECT_PATH"
+
+          # Récupération du code (reset --hard pour un état déterministe)
+          echo "📥 Récupération du code (reset --hard origin/${BRANCH})..."
+          git config --global --add safe.directory "$PROJECT_PATH" || true
+          git fetch --all --prune
+          git reset --hard "origin/${BRANCH}"
+
+          # Installation des dépendances
+          echo "📦 Installation des dépendances..."
+          npm ci
+
+          # Lint optionnel avant le build
+          if [ "$LINT_BEFORE_BUILD" = "true" ]; then
+            if ! npm run --silent | grep -qE '^\s*lint\b'; then
+              echo "❌ ERREUR: lint_before_build=true mais aucun script 'lint' dans package.json"
+              exit 1
+            fi
+            echo "🧹 Lint en cours..."
+            npm run lint
+          fi
+
+          # Build Angular — assume angular.json defaultConfiguration: production
+          echo "🔨 Build Angular en cours..."
+          npm run build
+
+          # Vérification que dist/ existe et n'est pas vide
+          if [ ! -d "dist" ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "❌ ERREUR: dist/ est vide ou n'existe pas après le build"
+            exit 1
+          fi
+          echo "✅ dist/ contient des fichiers"
+
+          # Copie des fichiers statiques
+          [ -f "public/.htaccess" ]   && cp public/.htaccess   dist/ && echo "✅ .htaccess copié"
+          [ -f "public/robots.txt" ]  && cp public/robots.txt  dist/ && echo "✅ robots.txt copié"
+
+          # Copie des sitemaps uniquement sur main, depuis la release courante (suit le symlink)
+          if [ "$BRANCH" = "main" ]; then
+            CURRENT="$(readlink -f www 2>/dev/null || true)"
+            if [ -n "$CURRENT" ] && [ -d "$CURRENT" ]; then
+              shopt -s nullglob
+              for f in "$CURRENT"/sitemap*.xml "$CURRENT"/sitemap*.xsl; do
+                cp "$f" dist/ && echo "✅ $(basename "$f") copié dans dist/"
+              done
+              shopt -u nullglob
+            fi
+          fi
+
+          # Rappel robots.txt en production
+          if [ "$ENVIRONMENT" = "production" ]; then
+            echo "⚠️ RAPPEL: Vérifiez la configuration de robots.txt pour la production"
+          fi
+
+          echo "✅ Build terminé avec succès"
+          BASH
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Configuration de la clé SSH
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Configuration des hôtes SSH connus
+        shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Déploiement atomique (releases + symlink)
+        shell: bash
+        env:
+          SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+          PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.releases_to_keep }}" <<'BASH'
+          set -euo pipefail
+          PROJECT_PATH="$1"
+          BRANCH="$2"
+          RELEASES_TO_KEEP="$3"
+
+          cd "$PROJECT_PATH"
+
+          # --- Validation pré-déploiement ---
+          if [ ! -d "dist" ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "❌ ERREUR: dist/ est vide. Déploiement annulé."
+            exit 1
+          fi
+
+          mkdir -p releases
+          RELEASE_NAME="$(date +%Y%m%d-%H%M%S)"
+          RELEASE_PATH="releases/$RELEASE_NAME"
+
+          # Note : la préservation des sitemaps depuis la release courante est
+          # déjà faite par le job `build` (cf. boucle sur sitemap*.xml/xsl).
+
+          # --- Promotion de dist/ en nouvelle release ---
+          mv dist "$RELEASE_PATH"
+          echo "📦 Nouvelle release : $RELEASE_PATH"
+
+          # --- Swap atomique du symlink www → release ---
+          echo "🔄 Activation de la release..."
+          if [ -L "www" ] || [ ! -e "www" ]; then
+            # Mode normal : swap atomique (ln -sfn est atomique sur même fs)
+            ln -sfn "$RELEASE_PATH" www-new
+            mv -Tf www-new www
+          else
+            # Migration unique depuis l'ancien mode (www = dossier réel)
+            BACKUP="wwwbkp-legacy-$(date +%Y%m%d-%H%M%S)"
+            echo "🆙 Migration legacy → symlink (www déplacé vers $BACKUP)"
+            mv www "$BACKUP"
+            ln -sfn "$RELEASE_PATH" www
+          fi
+          echo "✅ www → $RELEASE_PATH"
+
+          # --- Rotation des releases (garder N dernières) ---
+          KEEP="${RELEASES_TO_KEEP:-5}"
+          OLD=$(ls -1dt releases/*/ 2>/dev/null | tail -n +"$((KEEP + 1))" || true)
+          if [ -n "$OLD" ]; then
+            echo "$OLD" | xargs -r rm -rf
+            echo "🧹 Anciennes releases purgées (gardé $KEEP)"
+          fi
+          BASH
+
+  notify:
+    needs: [build, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Préparer les variables du message
+        id: meta
+        shell: bash
+        env:
+          COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
+          STACK_NAME: Angular
+          STACK_LOGO: https://angular.io/assets/images/logos/angular/angular.png
+        run: |
+          IS_FAILURE="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+          [ "${{ inputs.environment }}" = "production" ] && IS_PROD="true" || IS_PROD="false"
+
+          if [ "$IS_FAILURE" = "true" ]; then
+            ICON="❌"
+            [ "$IS_PROD" = "true" ] && COLOR="#a01515" || COLOR="#d97706"
+          else
+            ICON="✅"
+            [ "$IS_PROD" = "true" ] && COLOR="#1d7e2a" || COLOR="#3ec55c"
+          fi
+          [ "$IS_PROD" = "true" ] && ENV_LABEL="🚀 PRODUCTION" || ENV_LABEL="🚧 STAGING"
+
+          DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
+          COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
+          {
+            echo "color=$COLOR"
+            echo "icon=$ICON"
+            echo "env_label=$ENV_LABEL"
+            echo "deploy_date=$DEPLOY_DATE"
+            echo "commit_msg=$COMMIT_MSG"
+            echo "stack_name=$STACK_NAME"
+            echo "stack_logo=$STACK_LOGO"
+            echo "sha_short=${GITHUB_SHA:0:7}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notification Slack
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          errors: true
+          payload: |
+            {
+              "attachments": [{
+                "color": "${{ steps.meta.outputs.color }}",
+                "blocks": [
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "image", "image_url": "${{ steps.meta.outputs.stack_logo }}", "alt_text": "${{ steps.meta.outputs.stack_name }}" },
+                      { "type": "mrkdwn", "text": "*${{ steps.meta.outputs.stack_name }}*" }
+                    ]
+                  },
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.meta.outputs.icon }} ${{ steps.meta.outputs.env_label }}",
+                      "emoji": true
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
+                      { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" },
+                      { "type": "mrkdwn", "text": "*Auteur*\n${{ github.event.head_commit.author.name }}" },
+                      { "type": "mrkdwn", "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|`${{ steps.meta.outputs.sha_short }}`>" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "💬 _${{ steps.meta.outputs.commit_msg }}_"
+                    }
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "mrkdwn", "text": "📅 ${{ steps.meta.outputs.deploy_date }} • Lancé par ${{ github.actor }} • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Voir le run>" }
+                    ]
+                  }
+                ]
+              }]
+            }
