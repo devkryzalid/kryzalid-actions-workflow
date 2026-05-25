@@ -176,14 +176,20 @@ jobs:
             npm install
           fi
 
-          # Si MODE="dev" et que le script "dev" lance Vite, on bascule sur "build" :
-          # Vite en mode dev est un serveur HMR qui ne termine pas (port 5173 bind).
-          # Les projets Webpack/Mix où dev = build one-shot non-minifié restent inchangés.
+          # Vite : le script "dev" est un serveur HMR qui ne termine pas (port 5173).
+          # En staging on bascule sur "build:staging" si dispo (build CI-friendly qui
+          # garde les helpers dev), sinon "build". Les projets Webpack/Mix où "dev"
+          # est un build one-shot non-minifié restent inchangés.
           DEV_SCRIPT="$(node -e "process.stdout.write((require('./package.json').scripts||{}).dev||'')" 2>/dev/null || echo '')"
 
           if [ "$MODE" = "dev" ] && printf '%s' "$DEV_SCRIPT" | grep -qE '^[[:space:]]*vite([[:space:]]|$)'; then
-            echo "ℹ️  Script \"dev\" détecté comme Vite (serveur HMR). Bascule sur \"build\" pour CI."
-            MODE=build
+            if node -e "process.exit(((require('./package.json').scripts||{})['build:staging']?0:1))" 2>/dev/null; then
+              MODE="build:staging"
+              echo "ℹ️  Vite détecté. Bascule sur \"build:staging\" (helpers dev conservés)."
+            else
+              MODE=build
+              echo "ℹ️  Vite détecté, pas de script \"build:staging\". Fallback sur \"build\"."
+            fi
           fi
 
           echo "🏗️  npm run $MODE"
