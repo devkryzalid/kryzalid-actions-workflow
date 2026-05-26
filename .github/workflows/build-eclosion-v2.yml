@@ -208,9 +208,14 @@ jobs:
 
           # --- DEBUG temporaire : à retirer une fois le bug de remote résolu ---
           echo "--- DEBUG git context ---"
-          echo "pwd=$(pwd)"
-          echo "PROJECT_PATH=$PROJECT_PATH"
-          echo "git toplevel=$(git rev-parse --show-toplevel 2>&1 || true)"
+          echo "pwd_b64=$(pwd | base64)"
+          echo "toplevel_b64=$(git rev-parse --show-toplevel 2>/dev/null | base64)"
+          echo "remote_url_b64=$(git config --get remote.origin.url 2>/dev/null | base64)"
+          echo "config_origin_path_b64=$(realpath .git/config 2>/dev/null | base64)"
+          echo "ls .git head:"
+          ls -la .git 2>/dev/null | head -5 || true
+          echo "is .git a file (gitdir pointer)?"
+          [ -f .git ] && cat .git || echo "no (.git is dir or missing)"
           echo "remotes:"
           git remote -v || true
           echo "url config (incl. insteadOf):"
