@@ -205,6 +205,20 @@ jobs:
           # Récupération du code (reset --hard pour un état déterministe)
           echo "📥 Récupération du code (reset --hard origin/${BRANCH})..."
           git config --global --add safe.directory "$PROJECT_PATH" || true
+
+          # --- DEBUG temporaire : à retirer une fois le bug de remote résolu ---
+          echo "--- DEBUG git context ---"
+          echo "pwd=$(pwd)"
+          echo "PROJECT_PATH=$PROJECT_PATH"
+          echo "git toplevel=$(git rev-parse --show-toplevel 2>&1 || true)"
+          echo "remotes:"
+          git remote -v || true
+          echo "url config (incl. insteadOf):"
+          git config --list | grep -iE 'url|insteadof' || true
+          echo "/etc/gitconfig:"
+          cat /etc/gitconfig 2>/dev/null || echo "(none)"
+          echo "--- /DEBUG ---"
+
           git fetch --all --prune
           git reset --hard "origin/${BRANCH}"
 
