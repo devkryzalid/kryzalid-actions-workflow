@@ -198,6 +198,7 @@ jobs:
           # Copie des fichiers statiques
           [ -f "public/.htaccess" ]   && cp public/.htaccess   dist/ && echo "✅ .htaccess copié"
           [ -f "public/robots.txt" ]  && cp public/robots.txt  dist/ && echo "✅ robots.txt copié"
+          [ -f "public/llms.txt" ]  && cp public/llms.txt  dist/ && echo "✅ llms.txt copié"
 
           # Copie des sitemaps uniquement sur main, depuis la release courante (suit le symlink)
           if [ "$BRANCH" = "main" ]; then
