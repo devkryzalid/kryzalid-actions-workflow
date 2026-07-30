@@ -152,6 +152,7 @@ jobs:
             {
               "attachments": [{
                 "color": "${{ steps.meta.outputs.color }}",
+                "fallback": "${{ steps.meta.outputs.icon }} ${{ steps.meta.outputs.env_label }} — ${{ github.repository }} (${{ github.ref_name }}) — ${{ github.actor }}",
                 "blocks": [
                   {
                     "type": "context",
