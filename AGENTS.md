@@ -32,10 +32,11 @@ Tous prennent `inputs.environment` (`staging` | `production`) et le même set de
 - **Job `validate-secrets`** en amont : vérifie la présence des secrets selon `environment` et fail-fast. Tout nouveau workflow doit inclure ce job.
 - **Sélection ternaire des secrets** : `${{ inputs.environment == 'staging' && secrets.X_STAGING || secrets.X_PROD }}`. Garder ce pattern (pas de `if:` au niveau job pour switcher).
 - **Actions tierces SHA-pinned** avec commentaire de version :
-  - `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2`
-  - `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0`
-  - `webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1`
-  - `slackapi/slack-github-action@b0fa283ad8fea605de13dc3f449259339835fc52 # v2.1.0`
+  - `actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2`
+  - `webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0`
+  - `slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3`
+
+  Pas de `actions/setup-node` : Node est géré par `nvm` sur le serveur cible, pas sur le runner.
 
 ### SSH
 - **`ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts`** dans un step dédié, **sans** `StrictHostKeyChecking=no` ensuite. Plus de bypass MITM silencieux.
@@ -54,9 +55,11 @@ Le swap se fait via **`releases/` + symlink atomique** :
 **Préservation du sitemap.xml** : sur `main` uniquement, lu via `readlink -f www` (suit le symlink) avant le swap.
 
 ### Notifications Slack
-- **`slackapi/slack-github-action@v2.1.0`** avec `webhook:` + `webhook-type: incoming-webhook` (nouvelle API v2, plus de `SLACK_WEBHOOK_URL` en env var).
-- **Un seul job `notify`** par workflow avec `if: always()`, qui calcule le statut via `contains(needs.*.result, 'failure')` et formate via Block Kit avec `attachments[].color` (#36a64f succès, #dc3545 échec, #f0ad4e warning).
-- **Step `Préparer les variables du message`** qui définit `color`, `icon`, `status_text`, `env_icon`, `deploy_date`, `commit_msg` en outputs groupés (`{ ... } >> "$GITHUB_OUTPUT"` pour éviter SC2129).
+- **`slackapi/slack-github-action@v3.0.3`** avec `webhook:` + `webhook-type: incoming-webhook` + `errors: true` (plus de `SLACK_WEBHOOK_URL` en env var, et un échec de POST fait failer le step au lieu de passer silencieusement).
+- **Un seul job `notify`** par workflow avec `if: always()`, qui calcule le statut via `contains(needs.*.result, 'failure')` et formate via Block Kit dans un `attachments[]`.
+- **`attachments[].color` croise statut et environnement** : prod `#1d7e2a` succès / `#a01515` échec (saturé), staging `#3ec55c` succès / `#d97706` échec (plus clair), `#f0ad4e` pour les warnings `check-files`.
+- **Step `Préparer les variables du message`** (`id: meta`) qui définit `color`, `icon`, `env_label`, `deploy_date`, `commit_msg`, `stack_name`, `stack_logo`, `sha_short` en outputs groupés (`{ ... } >> "$GITHUB_OUTPUT"` pour éviter SC2129).
+- **`attachments[].fallback` obligatoire** : Slack ne génère aucun aperçu de notification (push mobile, notif desktop, liste de channels) à partir du contenu des `blocks`. Sans `fallback` — ou sans `text` de premier niveau — l'aperçu est vide. Format retenu : `<icon> <env_label> — <repo> (<branch>) — <actor>`, en texte brut sans mrkdwn. Ne pas utiliser `text` de premier niveau : il s'afficherait comme une ligne visible en doublon du block header.
 - **Échappement du commit message** : `head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r'` (échappe backslashes et guillemets, retire CR, garde uniquement la première ligne).
 
 ### Validation
