@@ -1,0 +1,272 @@
+name: Build and Deploy Laravel
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (staging or production)'
+        required: true
+        type: string
+      build_assets:
+        description: 'Build front-end assets with npm/Vite (set to false for API-only Laravel projects)'
+        required: false
+        type: boolean
+        default: true
+      restart_queue_worker:
+        description: 'Restart the Laravel queue worker after deploy (php artisan queue:restart) — enable if the project processes queued jobs'
+        required: false
+        type: boolean
+        default: false
+      php_bin:
+        description: 'PHP binary/command to use for composer and artisan (override on multi-PHP shared servers, e.g. php84)'
+        required: false
+        type: string
+        default: 'php'
+    secrets:
+      # Staging secrets
+      SSH_PRIVATE_KEY_STAGING:
+        required: false
+      SSH_USER_STAGING:
+        required: false
+      SERVER_HOST_STAGING:
+        required: false
+      PROJECT_PATH_STAGING:
+        required: false
+      # Production secrets
+      SSH_PRIVATE_KEY_PROD:
+        required: false
+      SSH_USER_PROD:
+        required: false
+      SERVER_HOST_PROD:
+        required: false
+      PROJECT_PATH_PROD:
+        required: false
+      # Common secrets
+      SLACK_WEBHOOK_URL:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-laravel-${{ inputs.environment }}-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  validate-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required secrets
+        shell: bash
+        run: |
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
+               [ -z "${{ secrets.SSH_USER_STAGING }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_STAGING }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_STAGING }}" ]; then
+              echo "Missing required staging secrets"
+              exit 1
+            fi
+          else
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_PROD }}" ] || \
+               [ -z "${{ secrets.SSH_USER_PROD }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_PROD }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_PROD }}" ]; then
+              echo "Missing required production secrets"
+              exit 1
+            fi
+          fi
+
+  deploy:
+    needs: validate-secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
+
+      - name: Configure SSH known hosts
+        shell: bash
+        env:
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy Laravel (on target server)
+        shell: bash
+        env:
+          SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
+          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+          PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SERVER_HOST" \
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.build_assets }}" "${{ inputs.restart_queue_worker }}" "${{ inputs.php_bin }}" <<'BASH'
+          set -euo pipefail
+          PROJECT_PATH="$1"
+          BRANCH="$2"
+          BUILD_ASSETS="$3"
+          RESTART_QUEUE_WORKER="$4"
+          PHP_BIN="$5"
+
+          if ! command -v "$PHP_BIN" >/dev/null 2>&1; then
+            echo "❌ ERREUR: binaire PHP '$PHP_BIN' introuvable dans PATH. Vérifie l'input php_bin du projet consommateur."
+            exit 1
+          fi
+          COMPOSER_BIN="$(command -v composer)"
+          if [ -z "$COMPOSER_BIN" ]; then
+            echo "❌ ERREUR: composer introuvable dans PATH."
+            exit 1
+          fi
+
+          git config --global --add safe.directory "$PROJECT_PATH" || true
+          cd "$PROJECT_PATH"
+
+          echo "📥 Récupération du code..."
+          git fetch --all --prune
+          git reset --hard "origin/${BRANCH}"
+          echo "✅ Reset sur origin/${BRANCH}"
+
+          echo "📦 composer install (via $PHP_BIN)..."
+          "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction
+
+          echo "🧹 Nettoyage des caches (avant migration, pour éviter un bootstrap/cache périmé)..."
+          if [ ! -f "cc.sh" ]; then
+            echo "❌ ERREUR: cc.sh introuvable à la racine du projet (convention standard des projets Laravel KRYZALID)."
+            exit 1
+          fi
+          PHP_BIN="$PHP_BIN" bash cc.sh
+
+          echo "🗄️  Migrations..."
+          "$PHP_BIN" artisan migrate --force
+
+          if [ "$BUILD_ASSETS" = "true" ]; then
+            echo "🎨 Build des assets front (npm/Vite)..."
+            if [ -s "$HOME/.nvm/nvm.sh" ]; then
+              . "$HOME/.nvm/nvm.sh"
+              [ -f ".nvmrc" ] && nvm use || true
+            fi
+            if ! command -v npm >/dev/null 2>&1; then
+              echo "❌ ERREUR: npm introuvable dans PATH. Installe Node/nvm sur le serveur, ou passe build_assets: false si ce projet est API-only."
+              exit 1
+            fi
+            echo "Node: $(node -v) | npm: $(npm -v)"
+            if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+              npm ci
+            else
+              echo "⚠️  Aucun lockfile → npm install"
+              npm install
+            fi
+            npm run build
+          else
+            echo "⏭️  build_assets=false, build front ignoré (projet API-only)."
+          fi
+
+          echo "🔧 Mise en cache config/routes/vues..."
+          "$PHP_BIN" artisan config:cache
+          "$PHP_BIN" artisan route:cache
+          "$PHP_BIN" artisan view:cache
+
+          if [ "$RESTART_QUEUE_WORKER" = "true" ]; then
+            echo "🔄 Redémarrage du queue worker (artisan queue:restart)..."
+            "$PHP_BIN" artisan queue:restart
+          else
+            echo "⏭️  restart_queue_worker=false, pas de queue worker à redémarrer pour ce projet."
+          fi
+
+          echo "✅ Déploiement terminé."
+          BASH
+
+  notify:
+    needs: deploy
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare notification metadata
+        id: meta
+        shell: bash
+        env:
+          COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
+          STACK_NAME: Laravel
+          STACK_LOGO: https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg
+        run: |
+          IS_FAILURE="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+          [ "${{ inputs.environment }}" = "production" ] && IS_PROD="true" || IS_PROD="false"
+
+          if [ "$IS_FAILURE" = "true" ]; then
+            ICON="❌"
+            [ "$IS_PROD" = "true" ] && COLOR="#a01515" || COLOR="#d97706"
+          else
+            ICON="✅"
+            [ "$IS_PROD" = "true" ] && COLOR="#1d7e2a" || COLOR="#3ec55c"
+          fi
+          [ "$IS_PROD" = "true" ] && ENV_LABEL="🚀 PRODUCTION" || ENV_LABEL="🚧 STAGING"
+
+          DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
+          COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
+          {
+            echo "color=$COLOR"
+            echo "icon=$ICON"
+            echo "env_label=$ENV_LABEL"
+            echo "deploy_date=$DEPLOY_DATE"
+            echo "commit_msg=$COMMIT_MSG"
+            echo "stack_name=$STACK_NAME"
+            echo "stack_logo=$STACK_LOGO"
+            echo "sha_short=${GITHUB_SHA:0:7}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          errors: true
+          payload: |
+            {
+              "attachments": [{
+                "color": "${{ steps.meta.outputs.color }}",
+                "fallback": "${{ steps.meta.outputs.icon }} ${{ steps.meta.outputs.env_label }} — ${{ github.repository }} (${{ github.ref_name }}) — ${{ github.actor }}",
+                "blocks": [
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "image", "image_url": "${{ steps.meta.outputs.stack_logo }}", "alt_text": "${{ steps.meta.outputs.stack_name }}" },
+                      { "type": "mrkdwn", "text": "*${{ steps.meta.outputs.stack_name }}*" }
+                    ]
+                  },
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.meta.outputs.icon }} ${{ steps.meta.outputs.env_label }}",
+                      "emoji": true
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      { "type": "mrkdwn", "text": "*Repo*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>" },
+                      { "type": "mrkdwn", "text": "*Branche*\n`${{ github.ref_name }}`" },
+                      { "type": "mrkdwn", "text": "*Auteur*\n${{ github.event.head_commit.author.name }}" },
+                      { "type": "mrkdwn", "text": "*Commit*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|`${{ steps.meta.outputs.sha_short }}`>" }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "💬 _${{ steps.meta.outputs.commit_msg }}_"
+                    }
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "mrkdwn", "text": "📅 ${{ steps.meta.outputs.deploy_date }} • Lancé par ${{ github.actor }} • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Voir le run>" }
+                    ]
+                  }
+                ]
+              }]
+            }
