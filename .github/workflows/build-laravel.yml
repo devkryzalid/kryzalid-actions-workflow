@@ -42,6 +42,16 @@ on:
         required: false
         type: boolean
         default: true
+      run_composer_install:
+        description: 'Run composer install --no-dev --optimize-autoloader after deploy. Set to false if this project manages PHP dependencies outside the CI flow.'
+        required: false
+        type: boolean
+        default: true
+      clear_caches:
+        description: 'Run cc.sh (config/cache/view/route clear) before migrations. Set to false if this project manages its caches outside the CI flow.'
+        required: false
+        type: boolean
+        default: true
     secrets:
       # Staging secrets
       SSH_PRIVATE_KEY_STAGING:
@@ -124,7 +134,7 @@ jobs:
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.build_assets }}" "${{ inputs.restart_queue_worker }}" "${{ inputs.php_bin }}" "${{ inputs.cache_routes }}" "${{ inputs.cache_config }}" "${{ inputs.cache_views }}" "${{ inputs.run_migrations }}" <<'BASH'
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.build_assets }}" "${{ inputs.restart_queue_worker }}" "${{ inputs.php_bin }}" "${{ inputs.cache_routes }}" "${{ inputs.cache_config }}" "${{ inputs.cache_views }}" "${{ inputs.run_migrations }}" "${{ inputs.run_composer_install }}" "${{ inputs.clear_caches }}" <<'BASH'
           set -euo pipefail
           PROJECT_PATH="$1"
           BRANCH="$2"
@@ -135,15 +145,19 @@ jobs:
           CACHE_CONFIG="$7"
           CACHE_VIEWS="$8"
           RUN_MIGRATIONS="$9"
+          RUN_COMPOSER_INSTALL="${10}"
+          CLEAR_CACHES="${11}"
 
           if ! command -v "$PHP_BIN" >/dev/null 2>&1; then
             echo "❌ ERREUR: binaire PHP '$PHP_BIN' introuvable dans PATH. Vérifie l'input php_bin du projet consommateur."
             exit 1
           fi
-          COMPOSER_BIN="$(command -v composer)"
-          if [ -z "$COMPOSER_BIN" ]; then
-            echo "❌ ERREUR: composer introuvable dans PATH."
-            exit 1
+          if [ "$RUN_COMPOSER_INSTALL" = "true" ]; then
+            COMPOSER_BIN="$(command -v composer)"
+            if [ -z "$COMPOSER_BIN" ]; then
+              echo "❌ ERREUR: composer introuvable dans PATH."
+              exit 1
+            fi
           fi
 
           git config --global --add safe.directory "$PROJECT_PATH" || true
@@ -154,15 +168,23 @@ jobs:
           git reset --hard "origin/${BRANCH}"
           echo "✅ Reset sur origin/${BRANCH}"
 
-          echo "📦 composer install (via $PHP_BIN)..."
-          "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction
-
-          echo "🧹 Nettoyage des caches (avant migration, pour éviter un bootstrap/cache périmé)..."
-          if [ ! -f "cc.sh" ]; then
-            echo "❌ ERREUR: cc.sh introuvable à la racine du projet (convention standard des projets Laravel KRYZALID)."
-            exit 1
+          if [ "$RUN_COMPOSER_INSTALL" = "true" ]; then
+            echo "📦 composer install (via $PHP_BIN)..."
+            "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction
+          else
+            echo "⏭️  run_composer_install=false, composer install ignoré pour ce projet."
           fi
-          PHP_BIN="$PHP_BIN" bash cc.sh
+
+          if [ "$CLEAR_CACHES" = "true" ]; then
+            echo "🧹 Nettoyage des caches (avant migration, pour éviter un bootstrap/cache périmé)..."
+            if [ ! -f "cc.sh" ]; then
+              echo "❌ ERREUR: cc.sh introuvable à la racine du projet (convention standard des projets Laravel KRYZALID)."
+              exit 1
+            fi
+            PHP_BIN="$PHP_BIN" bash cc.sh
+          else
+            echo "⏭️  clear_caches=false, cc.sh ignoré pour ce projet."
+          fi
 
           if [ "$RUN_MIGRATIONS" = "true" ]; then
             echo "🗄️  Migrations..."
@@ -247,8 +269,9 @@ jobs:
           fi
           [ "$IS_PROD" = "true" ] && ENV_LABEL="🚀 PRODUCTION" || ENV_LABEL="🚧 STAGING"
 
-          step_mark() { [ "$1" = "true" ] && echo "✅" || echo "⏭️"; }
-          STEPS_SUMMARY="Migrations $(step_mark "${{ inputs.run_migrations }}") · Assets $(step_mark "${{ inputs.build_assets }}") · Config cache $(step_mark "${{ inputs.cache_config }}") · View cache $(step_mark "${{ inputs.cache_views }}") · Route cache $(step_mark "${{ inputs.cache_routes }}") · Queue restart $(step_mark "${{ inputs.restart_queue_worker }}")"
+          step_mark() { [ "$1" = "true" ] && echo "✅" || echo "⏭️ ignoré"; }
+          NL='\n'
+          STEPS_SUMMARY="• Code : \`git reset --hard\` ✅${NL}• Dépendances (composer) : $(step_mark "${{ inputs.run_composer_install }}")${NL}• Clear caches (cc.sh) : $(step_mark "${{ inputs.clear_caches }}")${NL}• Migrations : $(step_mark "${{ inputs.run_migrations }}")${NL}• Build assets (npm) : $(step_mark "${{ inputs.build_assets }}")${NL}• Config cache : $(step_mark "${{ inputs.cache_config }}")${NL}• View cache : $(step_mark "${{ inputs.cache_views }}")${NL}• Route cache : $(step_mark "${{ inputs.cache_routes }}")${NL}• Queue restart : $(step_mark "${{ inputs.restart_queue_worker }}")"
 
           DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
           COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
@@ -308,10 +331,11 @@ jobs:
                     }
                   },
                   {
-                    "type": "context",
-                    "elements": [
-                      { "type": "mrkdwn", "text": "${{ steps.meta.outputs.steps_summary }}" }
-                    ]
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "${{ steps.meta.outputs.steps_summary }}"
+                    }
                   },
                   {
                     "type": "context",
