@@ -27,6 +27,21 @@ on:
         required: false
         type: boolean
         default: true
+      cache_config:
+        description: 'Run artisan config:cache after deploy. Set to false if config:cache produces bad values in this environment (observed: config:cache internally re-bootstraps the app and can resolve some env() values as empty in a non-interactive SSH context, even though env()/config() resolve correctly outside of config:cache — root cause not fully understood, disable as a safe workaround if hit).'
+        required: false
+        type: boolean
+        default: true
+      cache_views:
+        description: 'Run artisan view:cache after deploy. Set to false if it causes issues for this project.'
+        required: false
+        type: boolean
+        default: true
+      run_migrations:
+        description: 'Run artisan migrate --force after deploy. Set to false if this project manages migrations outside the CI flow.'
+        required: false
+        type: boolean
+        default: true
     secrets:
       # Staging secrets
       SSH_PRIVATE_KEY_STAGING:
@@ -109,7 +124,7 @@ jobs:
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.build_assets }}" "${{ inputs.restart_queue_worker }}" "${{ inputs.php_bin }}" "${{ inputs.cache_routes }}" <<'BASH'
+            bash -s -- "$PROJECT_PATH" "${{ github.ref_name }}" "${{ inputs.build_assets }}" "${{ inputs.restart_queue_worker }}" "${{ inputs.php_bin }}" "${{ inputs.cache_routes }}" "${{ inputs.cache_config }}" "${{ inputs.cache_views }}" "${{ inputs.run_migrations }}" <<'BASH'
           set -euo pipefail
           PROJECT_PATH="$1"
           BRANCH="$2"
@@ -117,6 +132,9 @@ jobs:
           RESTART_QUEUE_WORKER="$4"
           PHP_BIN="$5"
           CACHE_ROUTES="$6"
+          CACHE_CONFIG="$7"
+          CACHE_VIEWS="$8"
+          RUN_MIGRATIONS="$9"
 
           if ! command -v "$PHP_BIN" >/dev/null 2>&1; then
             echo "❌ ERREUR: binaire PHP '$PHP_BIN' introuvable dans PATH. Vérifie l'input php_bin du projet consommateur."
@@ -146,8 +164,12 @@ jobs:
           fi
           PHP_BIN="$PHP_BIN" bash cc.sh
 
-          echo "🗄️  Migrations..."
-          "$PHP_BIN" artisan migrate --force
+          if [ "$RUN_MIGRATIONS" = "true" ]; then
+            echo "🗄️  Migrations..."
+            "$PHP_BIN" artisan migrate --force
+          else
+            echo "⏭️  run_migrations=false, migrations ignorées pour ce projet."
+          fi
 
           if [ "$BUILD_ASSETS" = "true" ]; then
             echo "🎨 Build des assets front (npm/Vite)..."
@@ -171,9 +193,18 @@ jobs:
             echo "⏭️  build_assets=false, build front ignoré (projet API-only)."
           fi
 
-          echo "🔧 Mise en cache config/vues..."
-          "$PHP_BIN" artisan config:cache
-          "$PHP_BIN" artisan view:cache
+          echo "🔧 Mise en cache..."
+          if [ "$CACHE_CONFIG" = "true" ]; then
+            "$PHP_BIN" artisan config:cache
+          else
+            echo "⏭️  cache_config=false, config:cache ignoré pour ce projet."
+          fi
+
+          if [ "$CACHE_VIEWS" = "true" ]; then
+            "$PHP_BIN" artisan view:cache
+          else
+            echo "⏭️  cache_views=false, view:cache ignoré pour ce projet."
+          fi
 
           if [ "$CACHE_ROUTES" = "true" ]; then
             "$PHP_BIN" artisan route:cache
@@ -216,6 +247,9 @@ jobs:
           fi
           [ "$IS_PROD" = "true" ] && ENV_LABEL="🚀 PRODUCTION" || ENV_LABEL="🚧 STAGING"
 
+          step_mark() { [ "$1" = "true" ] && echo "✅" || echo "⏭️"; }
+          STEPS_SUMMARY="Migrations $(step_mark "${{ inputs.run_migrations }}") · Assets $(step_mark "${{ inputs.build_assets }}") · Config cache $(step_mark "${{ inputs.cache_config }}") · View cache $(step_mark "${{ inputs.cache_views }}") · Route cache $(step_mark "${{ inputs.cache_routes }}") · Queue restart $(step_mark "${{ inputs.restart_queue_worker }}")"
+
           DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
           COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
           {
@@ -227,6 +261,7 @@ jobs:
             echo "stack_name=$STACK_NAME"
             echo "stack_logo=$STACK_LOGO"
             echo "sha_short=${GITHUB_SHA:0:7}"
+            echo "steps_summary=$STEPS_SUMMARY"
           } >> "$GITHUB_OUTPUT"
 
       - name: Send Slack notification
@@ -271,6 +306,12 @@ jobs:
                       "type": "mrkdwn",
                       "text": "💬 _${{ steps.meta.outputs.commit_msg }}_"
                     }
+                  },
+                  {
+                    "type": "context",
+                    "elements": [
+                      { "type": "mrkdwn", "text": "${{ steps.meta.outputs.steps_summary }}" }
+                    ]
                   },
                   {
                     "type": "context",
