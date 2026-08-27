@@ -271,7 +271,7 @@ jobs:
 
           step_mark() { [ "$1" = "true" ] && echo "✅" || echo "⏭️ ignoré"; }
           NL='\n'
-          STEPS_SUMMARY="• Code : \`git reset --hard\` ✅${NL}• Dépendances (composer) : $(step_mark "${{ inputs.run_composer_install }}")${NL}• Clear caches (cc.sh) : $(step_mark "${{ inputs.clear_caches }}")${NL}• Migrations : $(step_mark "${{ inputs.run_migrations }}")${NL}• Build assets (npm) : $(step_mark "${{ inputs.build_assets }}")${NL}• Config cache : $(step_mark "${{ inputs.cache_config }}")${NL}• View cache : $(step_mark "${{ inputs.cache_views }}")${NL}• Route cache : $(step_mark "${{ inputs.cache_routes }}")${NL}• Queue restart : $(step_mark "${{ inputs.restart_queue_worker }}")"
+          STEPS_SUMMARY="• Code : ✅${NL}• Dépendances (composer) : $(step_mark "${{ inputs.run_composer_install }}")${NL}• Clear caches (cc.sh) : $(step_mark "${{ inputs.clear_caches }}")${NL}• Migrations : $(step_mark "${{ inputs.run_migrations }}")${NL}• Build assets (npm) : $(step_mark "${{ inputs.build_assets }}")${NL}• Config cache : $(step_mark "${{ inputs.cache_config }}")${NL}• View cache : $(step_mark "${{ inputs.cache_views }}")${NL}• Route cache : $(step_mark "${{ inputs.cache_routes }}")${NL}• Queue restart : $(step_mark "${{ inputs.restart_queue_worker }}")"
 
           DEPLOY_DATE=$(date '+%d/%m/%Y %H:%M')
           COMMIT_MSG=$(printf '%s' "$COMMIT_MSG_RAW" | head -1 | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r')
