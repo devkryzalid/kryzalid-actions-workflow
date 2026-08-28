@@ -112,10 +112,22 @@ jobs:
           cd "$ROOT"
           # les git < 2.36 ne normalisent pas le chemin avant de le comparer
           ROOT="$(pwd -P)"
-          # --global echoue en silence quand HOME n'est pas inscriptible; -c ne depend de rien
-          git config --global --add safe.directory "$ROOT" || true
+          echo "🔧 $(git --version) | utilisateur: $(id -un) | HOME: ${HOME:-non defini}"
+
+          # Le repo appartient souvent a un autre utilisateur que celui du deploiement.
+          # En SSH non interactif, HOME peut etre absent ou en lecture seule: on bascule
+          # alors le fichier global sur un temporaire au lieu d'ignorer l'echec.
+          if ! git config --global --add safe.directory "$ROOT" 2>/dev/null; then
+            GIT_CONFIG_GLOBAL="$(mktemp)"
+            export GIT_CONFIG_GLOBAL
+            git config --global --add safe.directory "$ROOT"
+            echo "ℹ️  gitconfig global inaccessible: safe.directory pose dans $GIT_CONFIG_GLOBAL"
+          fi
+
+          # -c en plus du global: couvre le cas ou le fichier ecrit n'est pas celui relu
           git -c safe.directory="$ROOT" fetch --all --prune
           git -c safe.directory="$ROOT" reset --hard "origin/${BRANCH}"
+          unset GIT_CONFIG_GLOBAL
           echo "✅ Git reset sur origin/${BRANCH} dans: $ROOT"
 
           # --- Trouver automatiquement le dossier qui contient package.json ---
