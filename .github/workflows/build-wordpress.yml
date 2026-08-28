@@ -104,15 +104,18 @@ jobs:
             "$SSH_USER@$SERVER_HOST" \
             bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" <<'BASH'
           set -euo pipefail
-          ROOT="$1"     # racine du repo git
+          ROOT="${1%/}" # racine du repo git, sans slash final
           BRANCH="$2"
           MODE="$3"
 
           # --- Git au ROOT du repo ---
-          git config --global --add safe.directory "$ROOT" || true
           cd "$ROOT"
-          git fetch --all --prune
-          git reset --hard "origin/${BRANCH}"
+          # les git < 2.36 ne normalisent pas le chemin avant de le comparer
+          ROOT="$(pwd -P)"
+          # --global echoue en silence quand HOME n'est pas inscriptible; -c ne depend de rien
+          git config --global --add safe.directory "$ROOT" || true
+          git -c safe.directory="$ROOT" fetch --all --prune
+          git -c safe.directory="$ROOT" reset --hard "origin/${BRANCH}"
           echo "✅ Git reset sur origin/${BRANCH} dans: $ROOT"
 
           # --- Trouver automatiquement le dossier qui contient package.json ---
