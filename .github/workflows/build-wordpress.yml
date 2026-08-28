@@ -104,15 +104,17 @@ jobs:
             "$SSH_USER@$SERVER_HOST" \
             bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" <<'BASH'
           set -euo pipefail
-          ROOT="${1%/}" # racine du repo git, sans slash final
+          ROOT="$1"     # racine du repo git
           BRANCH="$2"
           MODE="$3"
 
           # --- Git au ROOT du repo ---
           cd "$ROOT"
-          # les git < 2.36 ne normalisent pas le chemin avant de le comparer
-          ROOT="$(pwd -P)"
+          # Le chemin controle par git n'est pas toujours PROJECT_PATH (symlink, montage,
+          # sous-dossier): safe.directory est compare a celui-la, donc on le lui demande.
+          ROOT="$(git -c safe.directory='*' rev-parse --show-toplevel)"
           echo "🔧 $(git --version) | utilisateur: $(id -un) | HOME: ${HOME:-non defini}"
+          echo "📂 Repo git resolu: $ROOT"
 
           # Le repo appartient souvent a un autre utilisateur que celui du deploiement.
           # En SSH non interactif, HOME peut etre absent ou en lecture seule: on bascule
@@ -124,7 +126,6 @@ jobs:
             echo "ℹ️  gitconfig global inaccessible: safe.directory pose dans $GIT_CONFIG_GLOBAL"
           fi
 
-          # -c en plus du global: couvre le cas ou le fichier ecrit n'est pas celui relu
           git -c safe.directory="$ROOT" fetch --all --prune
           git -c safe.directory="$ROOT" reset --hard "origin/${BRANCH}"
           unset GIT_CONFIG_GLOBAL
