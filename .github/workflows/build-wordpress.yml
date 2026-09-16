@@ -7,6 +7,11 @@ on:
         description: "Environnement cible (staging ou production)"
         required: true
         type: string
+      php_bin:
+        description: "Binaire PHP pour composer quand le repo a un composer.json racine (plugins gérés par Composer). Override sur serveur multi-PHP, ex: php84"
+        required: false
+        type: string
+        default: "php"
     secrets:
       # Secrets de staging
       SSH_PRIVATE_KEY_STAGING:
@@ -102,11 +107,12 @@ jobs:
 
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" <<'BASH'
+            bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" "${{ inputs.php_bin }}" <<'BASH'
           set -euo pipefail
           ROOT="$1"     # racine du repo git
           BRANCH="$2"
           MODE="$3"
+          PHP_BIN="$4"
 
           # --- Git au ROOT du repo ---
           cd "$ROOT"
@@ -127,9 +133,77 @@ jobs:
           fi
 
           git -c safe.directory="$ROOT" fetch --all --prune
+
+          # --- Plugins WordPress geres par Composer : controles AVANT le reset ---
+          # Le reset supprime les dossiers de plugins qui etaient suivis par git. Si composer
+          # install ne peut pas les remettre ensuite, le site tourne sans ses plugins : tout
+          # ce qui peut le faire echouer est verifie ici, sur le commit entrant, sans rien toucher.
+          USES_COMPOSER=false
+          if git -c safe.directory="$ROOT" cat-file -e "origin/${BRANCH}:composer.json" 2>/dev/null; then
+            USES_COMPOSER=true
+            if ! command -v "$PHP_BIN" >/dev/null 2>&1; then
+              echo "❌ Binaire PHP '$PHP_BIN' introuvable dans PATH. Verifie l'input php_bin du projet."
+              exit 1
+            fi
+            if ! COMPOSER_BIN="$(command -v composer)"; then
+              echo "❌ composer introuvable dans PATH alors que le repo a un composer.json racine."
+              exit 1
+            fi
+            # Sans lock, le serveur resoudrait lui-meme les versions : jamais en deploiement.
+            if ! git -c safe.directory="$ROOT" cat-file -e "origin/${BRANCH}:composer.lock" 2>/dev/null; then
+              echo "❌ composer.json sans composer.lock sur origin/${BRANCH}. Commiter le lock avant de deployer."
+              exit 1
+            fi
+            # La racine du repo est la racine web : un auth.json y serait telechargeable.
+            if [ -f "$ROOT/auth.json" ]; then
+              echo "❌ $ROOT/auth.json expose licences et token a qui ouvre /auth.json. Le deplacer dans le auth.json global de Composer de l'utilisateur $(id -un)."
+              exit 1
+            fi
+            if [ -z "${HOME:-}" ] && [ -z "${COMPOSER_HOME:-}" ]; then
+              echo "❌ Ni HOME ni COMPOSER_HOME : impossible de trouver le auth.json global de Composer."
+              exit 1
+            fi
+            COMPOSER_GLOBAL_HOME="$("$PHP_BIN" "$COMPOSER_BIN" config --global home 2>/dev/null || true)"
+            # Composer cree lui-meme un auth.json vide au premier lancement : on verifie le contenu,
+            # hote par hote, pour chaque depot prive du composer.json entrant. Seuls les hotes s'affichent.
+            MISSING_AUTH="$(git -c safe.directory="$ROOT" show "origin/${BRANCH}:composer.json" | "$PHP_BIN" -r '
+              $project = json_decode(stream_get_contents(STDIN), true) ?: [];
+              $sources = [
+                  json_decode((string) @file_get_contents($argv[1]."/auth.json"), true) ?: [],
+                  json_decode((string) getenv("COMPOSER_AUTH"), true) ?: [],
+              ];
+              $missing = [];
+              foreach ($project["repositories"] ?? [] as $repo) {
+                  $host = (string) parse_url($repo["url"] ?? "", PHP_URL_HOST);
+                  if ($host === "" || $host === "wpackagist.org") {
+                      continue;
+                  }
+                  $key = $host === "github.com" ? "github-oauth" : "http-basic";
+                  $found = false;
+                  foreach ($sources as $auth) {
+                      $found = $found || ! empty($auth[$key][$host]);
+                  }
+                  if (! $found) {
+                      $missing[$key.":".$host] = true;
+                  }
+              }
+              echo implode(" ", array_keys($missing));
+            ' "$COMPOSER_GLOBAL_HOME")"
+            if [ -n "$MISSING_AUTH" ]; then
+              echo "❌ Identifiants Composer manquants pour $(id -un) ($COMPOSER_GLOBAL_HOME/auth.json) : $MISSING_AUTH"
+              exit 1
+            fi
+            echo "✅ Controles Composer OK"
+          fi
+
           git -c safe.directory="$ROOT" reset --hard "origin/${BRANCH}"
           unset GIT_CONFIG_GLOBAL
           echo "✅ Git reset sur origin/${BRANCH} dans: $ROOT"
+
+          if [ "$USES_COMPOSER" = "true" ]; then
+            echo "📦 composer install (via $PHP_BIN)"
+            (cd "$ROOT" && "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --no-interaction --prefer-dist --optimize-autoloader)
+          fi
 
           # --- Trouver automatiquement le dossier qui contient package.json ---
           choose_workdir() {
