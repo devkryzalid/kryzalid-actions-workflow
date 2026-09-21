@@ -12,6 +12,11 @@ on:
         required: false
         type: string
         default: "php"
+      site_url:
+        description: "URL publique du site, pour verifier apres deploiement que composer.json n'est pas servi. Par defaut https://<dossier parent de public_html>"
+        required: false
+        type: string
+        default: ""
     secrets:
       # Secrets de staging
       SSH_PRIVATE_KEY_STAGING:
@@ -107,12 +112,13 @@ jobs:
 
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" "${{ inputs.php_bin }}" <<'BASH'
+            bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" "${{ inputs.php_bin }}" "${{ inputs.site_url }}" <<'BASH'
           set -euo pipefail
           ROOT="$1"     # racine du repo git
           BRANCH="$2"
           MODE="$3"
           PHP_BIN="$4"
+          SITE_URL="$5"
 
           # --- Git au ROOT du repo ---
           cd "$ROOT"
@@ -203,6 +209,22 @@ jobs:
           if [ "$USES_COMPOSER" = "true" ]; then
             echo "📦 composer install (via $PHP_BIN)"
             (cd "$ROOT" && "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --no-interaction --prefer-dist --optimize-autoloader)
+
+            # La racine web sert desormais composer.json, composer.lock et vendor/ : le serveur
+            # doit les refuser (zz-composer-deny.conf). Un 200 ici = serveur oublie, on arrete.
+            if [ -z "$SITE_URL" ]; then
+              SITE_URL="https://$(basename "$(dirname "$ROOT")")"   # /var/www/html/<domaine>/public_html
+            fi
+            EXPOSED=""
+            for path in /composer.json /composer.lock /vendor/autoload.php; do
+              code="$(curl -s -o /dev/null -w '%{http_code}' -A 'kryzalid-deploy-check' --max-time 15 "${SITE_URL%/}$path" || echo 000)"
+              [ "$code" = "200" ] && EXPOSED="$EXPOSED $path($code)"
+            done
+            if [ -n "$EXPOSED" ]; then
+              echo "❌ Fichiers Composer servis publiquement sur $SITE_URL :$EXPOSED. Poser zz-composer-deny.conf sur ce serveur (kryzawatch/agent/tools)."
+              exit 1
+            fi
+            echo "✅ Fichiers Composer non servis sur $SITE_URL"
           fi
 
           # --- Trouver automatiquement le dossier qui contient package.json ---
