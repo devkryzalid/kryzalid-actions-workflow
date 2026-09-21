@@ -27,6 +27,8 @@ on:
         required: false
       PROJECT_PATH_STAGING:
         required: false
+      SSH_PORT_STAGING:
+        required: false
       # Secrets de production
       SSH_PRIVATE_KEY_PROD:
         required: false
@@ -35,6 +37,8 @@ on:
       SERVER_HOST_PROD:
         required: false
       PROJECT_PATH_PROD:
+        required: false
+      SSH_PORT_PROD:
         required: false
       # Secrets communs
       SLACK_WEBHOOK_URL:
@@ -96,9 +100,10 @@ jobs:
         shell: bash
         env:
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
+          SSH_PORT: ${{ inputs.environment == 'staging' && (secrets.SSH_PORT_STAGING || '22') || (secrets.SSH_PORT_PROD || '22') }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
       - name: Déploiement et build
         shell: bash
@@ -106,11 +111,13 @@ jobs:
           SSH_USER: ${{ inputs.environment == 'staging' && secrets.SSH_USER_STAGING || secrets.SSH_USER_PROD }}
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
           PROJECT_PATH: ${{ inputs.environment == 'staging' && secrets.PROJECT_PATH_STAGING || secrets.PROJECT_PATH_PROD }}
+          SSH_PORT: ${{ inputs.environment == 'staging' && (secrets.SSH_PORT_STAGING || '22') || (secrets.SSH_PORT_PROD || '22') }}
         run: |
           BRANCH="${{ github.ref_name }}"
           MODE="${{ steps.env.outputs.build_command }}"  # "dev" en staging, "build" en prod
 
-          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+          # Hebergements mutualises (cPanel) exposent souvent SSH ailleurs que sur le 22
+          ssh -p "${SSH_PORT:-22}" -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
             bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" "${{ inputs.php_bin }}" "${{ inputs.site_url }}" <<'BASH'
           set -euo pipefail
