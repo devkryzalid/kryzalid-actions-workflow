@@ -209,7 +209,7 @@ jobs:
             # Le core vit dans wp/ : le wp-config.php du serveur (non versionne) doit y pointer,
             # sinon le reset supprime le core de la racine et le site tombe sur un ABSPATH perime.
             INCOMING_COMPOSER_JSON="$(git -c safe.directory="$ROOT" show "origin/${BRANCH}:composer.json")"
-            if grep -q '"johnpbloch/wordpress-core"' <<< "$INCOMING_COMPOSER_JSON" \
+            if grep -qE '"(roots/wordpress[a-z-]*|johnpbloch/wordpress-core)"' <<< "$INCOMING_COMPOSER_JSON" \
                && [ -f "$ROOT/wp-config.php" ] \
                && ! grep -qE "ABSPATH.*/wp/" "$ROOT/wp-config.php"; then
               echo "❌ Le core passe dans wp/ mais $ROOT/wp-config.php n'y pointe pas (ABSPATH, WP_SITEURL, WP_CONTENT_DIR : voir wp-config.dist.php). Mettre a jour ce fichier et le .htaccess (sample.htaccess) sur le serveur avant de deployer."
