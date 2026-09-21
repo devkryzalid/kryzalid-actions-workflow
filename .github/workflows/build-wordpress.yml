@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       php_bin:
-        description: "Binaire PHP pour composer quand le repo a un composer.json racine (plugins gérés par Composer). Override sur serveur multi-PHP, ex: php84"
+        description: "Binaire PHP pour composer quand le repo a un composer.json racine (core et plugins gérés par Composer). Override sur serveur multi-PHP, ex: php84"
         required: false
         type: string
         default: "php"
@@ -147,8 +147,8 @@ jobs:
 
           git -c safe.directory="$ROOT" fetch --all --prune
 
-          # --- Plugins WordPress geres par Composer : controles AVANT le reset ---
-          # Le reset supprime les dossiers de plugins qui etaient suivis par git. Si composer
+          # --- Core et plugins WordPress geres par Composer : controles AVANT le reset ---
+          # Le reset supprime le core et les dossiers de plugins qui etaient suivis par git. Si composer
           # install ne peut pas les remettre ensuite, le site tourne sans ses plugins : tout
           # ce qui peut le faire echouer est verifie ici, sur le commit entrant, sans rien toucher.
           USES_COMPOSER=false
@@ -204,6 +204,15 @@ jobs:
             ' "$COMPOSER_GLOBAL_HOME")"
             if [ -n "$MISSING_AUTH" ]; then
               echo "❌ Identifiants Composer manquants pour $(id -un) ($COMPOSER_GLOBAL_HOME/auth.json) : $MISSING_AUTH"
+              exit 1
+            fi
+            # Le core vit dans wp/ : le wp-config.php du serveur (non versionne) doit y pointer,
+            # sinon le reset supprime le core de la racine et le site tombe sur un ABSPATH perime.
+            INCOMING_COMPOSER_JSON="$(git -c safe.directory="$ROOT" show "origin/${BRANCH}:composer.json")"
+            if grep -q '"johnpbloch/wordpress-core"' <<< "$INCOMING_COMPOSER_JSON" \
+               && [ -f "$ROOT/wp-config.php" ] \
+               && ! grep -qE "ABSPATH.*/wp/" "$ROOT/wp-config.php"; then
+              echo "❌ Le core passe dans wp/ mais $ROOT/wp-config.php n'y pointe pas (ABSPATH, WP_SITEURL, WP_CONTENT_DIR : voir wp-config.dist.php). Mettre a jour ce fichier et le .htaccess (sample.htaccess) sur le serveur avant de deployer."
               exit 1
             fi
             echo "✅ Controles Composer OK"
