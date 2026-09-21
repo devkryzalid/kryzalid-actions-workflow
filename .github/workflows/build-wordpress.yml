@@ -118,7 +118,7 @@ jobs:
           BRANCH="$2"
           MODE="$3"
           PHP_BIN="$4"
-          SITE_URL="$5"
+          SITE_URL="${5:-}"   # ssh re-parses the command line: an empty argument does not survive it
 
           # --- Git au ROOT du repo ---
           cd "$ROOT"
