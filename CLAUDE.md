@@ -1,6 +1,6 @@
-# AGENTS.md
+# kryzalid-actions-workflow
 
-This file provides guidance to coding agents (Claude Code, etc.) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
 
 ## Nature du repo
 
