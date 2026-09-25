@@ -273,55 +273,56 @@ jobs:
             return 1
           }
 
-          if ! WORKDIR="$(choose_workdir "$ROOT")"; then
-            echo "❌ Aucun package.json trouvé sous $ROOT (hors node_modules/vendor)."
-            echo "   Vérifie que PROJECT_PATH pointe bien sur le repo contenant le code front,"
-            echo "   ou ajoute un input 'workdir' si tu veux forcer un sous-dossier."
-            exit 1
-          fi
+          # Un site WordPress editorial (contenu en blocs, CSS via plugin) n'a pas de front
+          # a compiler : absence de package.json = rien a builder, pas une erreur.
+          if WORKDIR="$(choose_workdir "$ROOT")"; then
+            echo "📁 Dossier Node sélectionné: $WORKDIR"
 
-          echo "📁 Dossier Node sélectionné: $WORKDIR"
-
-          # --- Activer Node/npm (nvm si dispo, sinon global) ---
-          if [ -s "$HOME/.nvm/nvm.sh" ]; then
-            . "$HOME/.nvm/nvm.sh"
-            [ -f "$WORKDIR/.nvmrc" ] && (cd "$WORKDIR" && nvm use) || true
-          fi
-          if ! command -v npm >/dev/null 2>&1; then
-            echo "❌ npm introuvable dans PATH. Installe Node globalement ou charge nvm dans les shells non-interactifs."
-            exit 1
-          fi
-          echo "Node: $(node -v) | npm: $(npm -v)"
-
-          # --- Installer deps & build dans le WORKDIR ---
-          cd "$WORKDIR"
-
-          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            echo "📦 npm ci"
-            npm ci
-          else
-            echo "⚠️  Aucun lockfile → npm install"
-            npm install
-          fi
-
-          # Vite : le script "dev" est un serveur HMR qui ne termine pas (port 5173).
-          # En staging on bascule sur "build:staging" si dispo (build CI-friendly qui
-          # garde les helpers dev), sinon "build". Les projets Webpack/Mix où "dev"
-          # est un build one-shot non-minifié restent inchangés.
-          DEV_SCRIPT="$(node -e "process.stdout.write((require('./package.json').scripts||{}).dev||'')" 2>/dev/null || echo '')"
-
-          if [ "$MODE" = "dev" ] && printf '%s' "$DEV_SCRIPT" | grep -qE '^[[:space:]]*vite([[:space:]]|$)'; then
-            if node -e "process.exit(((require('./package.json').scripts||{})['build:staging']?0:1))" 2>/dev/null; then
-              MODE="build:staging"
-              echo "ℹ️  Vite détecté. Bascule sur \"build:staging\" (helpers dev conservés)."
-            else
-              MODE=build
-              echo "ℹ️  Vite détecté, pas de script \"build:staging\". Fallback sur \"build\"."
+            # --- Activer Node/npm (nvm si dispo, sinon global) ---
+            if [ -s "$HOME/.nvm/nvm.sh" ]; then
+              . "$HOME/.nvm/nvm.sh"
+              [ -f "$WORKDIR/.nvmrc" ] && (cd "$WORKDIR" && nvm use) || true
             fi
-          fi
+            if ! command -v npm >/dev/null 2>&1; then
+              echo "❌ npm introuvable dans PATH. Installe Node globalement ou charge nvm dans les shells non-interactifs."
+              exit 1
+            fi
+            echo "Node: $(node -v) | npm: $(npm -v)"
 
-          echo "🏗️  npm run $MODE"
-          npm run "$MODE"
+            # --- Installer deps & build dans le WORKDIR ---
+            cd "$WORKDIR"
+
+            if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+              echo "📦 npm ci"
+              npm ci
+            else
+              echo "⚠️  Aucun lockfile → npm install"
+              npm install
+            fi
+
+            # Vite : le script "dev" est un serveur HMR qui ne termine pas (port 5173).
+            # En staging on bascule sur "build:staging" si dispo (build CI-friendly qui
+            # garde les helpers dev), sinon "build". Les projets Webpack/Mix où "dev"
+            # est un build one-shot non-minifié restent inchangés.
+            DEV_SCRIPT="$(node -e "process.stdout.write((require('./package.json').scripts||{}).dev||'')" 2>/dev/null || echo '')"
+
+            if [ "$MODE" = "dev" ] && printf '%s' "$DEV_SCRIPT" | grep -qE '^[[:space:]]*vite([[:space:]]|$)'; then
+              if node -e "process.exit(((require('./package.json').scripts||{})['build:staging']?0:1))" 2>/dev/null; then
+                MODE="build:staging"
+                echo "ℹ️  Vite détecté. Bascule sur \"build:staging\" (helpers dev conservés)."
+              else
+                MODE=build
+                echo "ℹ️  Vite détecté, pas de script \"build:staging\". Fallback sur \"build\"."
+              fi
+            fi
+
+            echo "🏗️  npm run $MODE"
+            npm run "$MODE"
+          else
+            echo "ℹ️  Aucun package.json sous $ROOT : aucun build front, etape ignoree."
+            echo "   Si ce projet est cense avoir un front compile, verifier que PROJECT_PATH"
+            echo "   pointe sur le repo qui contient le code front."
+          fi
 
           echo "✅ Déploiement terminé."
           BASH
