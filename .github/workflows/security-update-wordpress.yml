@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: "8.3"
+      tools_ref:
+        description: "Ref de kryzalid-actions-workflow d'ou lire les scripts PHP : a aligner sur la ref du uses: quand on teste une branche"
+        required: false
+        type: string
+        default: "main"
     secrets:
       SECURITY_BOT_CLIENT_ID:
         required: true
@@ -94,7 +99,7 @@ jobs:
         with:
           # Public repository: no token, so the write-capable bot needs no access to the shared workflows.
           repository: ${{ github.repository_owner }}/kryzalid-actions-workflow
-          ref: main
+          ref: ${{ inputs.tools_ref }}
           persist-credentials: false
           path: tools
           sparse-checkout: .github/scripts/security-update
