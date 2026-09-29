@@ -38,9 +38,8 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: security-update-${{ github.repository }}
-  cancel-in-progress: false
+# No concurrency group: GitHub keeps a single pending run per group and cancels the others,
+# which would drop a second vulnerability dispatched right after the first.
 
 jobs:
   update:
