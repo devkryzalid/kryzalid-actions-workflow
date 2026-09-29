@@ -75,4 +75,53 @@ check('cleanTitle caps the length',
     mb_strlen(SecurityUpdate::cleanTitle(str_repeat('é', 300))),
     120);
 
+$context = [
+    'title' => 'WP-Members',
+    'slug' => 'wp-members',
+    'type' => 'plugin',
+    'package' => 'wpackagist-plugin/wp-members',
+    'from' => '3.4.8',
+    'to' => '4.0.0',
+    'major_jump' => true,
+    'cve' => 'CVE-2026-12345',
+    'severity' => 'critical',
+    'advisory_url' => 'https://www.wordfence.com/threat-intel/vulnerabilities/id/abc',
+    'run_site_id' => '42',
+];
+
+check('commitMessage follows the maintenance convention',
+    SecurityUpdate::commitMessage($context),
+    "chore(deps): upgrade WP-Members from 3.4.8 to 4.0.0\n\nSecurity fix for CVE-2026-12345 (critical).\nAdvisory: https://www.wordfence.com/threat-intel/vulnerabilities/id/abc\n");
+check('commitMessage without CVE nor advisory',
+    SecurityUpdate::commitMessage(['cve' => '', 'severity' => '', 'advisory_url' => ''] + $context),
+    "chore(deps): upgrade WP-Members from 3.4.8 to 4.0.0\n\nSecurity fix.\n");
+check('prTitle flags a major jump',
+    SecurityUpdate::prTitle($context),
+    '[major] chore(deps): upgrade WP-Members from 3.4.8 to 4.0.0');
+check('prTitle without major jump',
+    SecurityUpdate::prTitle(['major_jump' => false] + $context),
+    'chore(deps): upgrade WP-Members from 3.4.8 to 4.0.0');
+
+$body = SecurityUpdate::prBody($context);
+check('prBody warns about the major jump', str_contains($body, 'Saut de version majeure (3 → 4)'), true);
+check('prBody links the wordpress.org changelog', str_contains($body, 'https://wordpress.org/plugins/wp-members/#developers'), true);
+check('prBody reminds that merging deploys', str_contains($body, 'Merger cette PR déploie en production.'), true);
+check('prBody has no changelog link for a premium mirror',
+    str_contains(SecurityUpdate::prBody(['package' => 'kryzalid-premium/tooltippro'] + $context), 'Changelog'),
+    false);
+
+check('outcome is single-line JSON',
+    SecurityUpdate::outcome('pr_opened', '', 'https://github.com/devkryzalid/q2-guiderc/pull/7', '4.0.0', true),
+    '{"status":"pr_opened","reason":"","pr_url":"https://github.com/devkryzalid/q2-guiderc/pull/7","target_version":"4.0.0","major_jump":true}');
+// json_encode already turns a newline into the two characters \n; the annotation must only escape %.
+check('annotation escapes percent and stays on one line',
+    SecurityUpdate::annotation(SecurityUpdate::outcome('failed', "100% raté\nligne 2")),
+    '::notice title=security-update::{"status":"failed","reason":"100%25 raté\nligne 2","pr_url":"","target_version":"","major_jump":false}');
+check('annotation escapes raw newlines of a hand-written outcome',
+    SecurityUpdate::annotation("{\"a\":1}\n{\"b\":2}"),
+    '::notice title=security-update::{"a":1}%0A{"b":2}');
+check('annotation falls back to failed when no outcome was written',
+    SecurityUpdate::annotation(null),
+    '::notice title=security-update::{"status":"failed","reason":"Le workflow s\'est arrêté avant de produire un résultat : voir les logs.","pr_url":"","target_version":"","major_jump":false}');
+
 exit($failures > 0 ? 1 : 0);
