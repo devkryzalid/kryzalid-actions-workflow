@@ -197,6 +197,37 @@ jobs:
             php "$GITHUB_WORKSPACE/tools/.github/scripts/security-update/cli.php" annotation "$RUNNER_TEMP/outcome.json"
           fi
 
+  # A leftover security/<slug>-<version> branch reads as "PR in progress" and would skip every later fix.
+  cleanup:
+    if: >-
+      github.event_name == 'pull_request'
+      && startsWith(github.event.pull_request.head.ref, 'security/')
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SECURITY_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Delete the security branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # 422: already gone (deleted by hand or by the repository setting).
+          if ! OUT=$(gh api -X DELETE "repos/$REPOSITORY/git/refs/heads/$BRANCH" 2>&1); then
+            grep -q "HTTP 422" <<<"$OUT" || { echo "$OUT"; exit 1; }
+          fi
+          echo "Branche $BRANCH supprimée."
+
   merge-back:
     if: >-
       github.event_name == 'pull_request'
