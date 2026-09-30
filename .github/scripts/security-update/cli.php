@@ -18,6 +18,7 @@ $context = fn (): array => [
     'severity' => (string) getenv('SEVERITY'),
     'advisory_url' => (string) getenv('ADVISORY_URL'),
     'run_site_id' => (string) getenv('RUN_SITE_ID'),
+    'advisories' => SecurityUpdate::advisories((string) getenv('ADVISORIES'), (string) getenv('TO')),
 ];
 
 echo match ($command) {

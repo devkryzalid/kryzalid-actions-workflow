@@ -68,8 +68,56 @@ final class SecurityUpdate
         return explode('.', $version)[0];
     }
 
+    /** Advisories of the input fixed by $target; the input comes from outside, so invalid fields are dropped. */
+    public static function advisories(string $json, string $target): array
+    {
+        $items = json_decode($json, true);
+
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $rank = ['critical' => 4, 'high' => 3, 'medium' => 2, 'low' => 1];
+        $fixed = [];
+
+        foreach (array_slice($items, 0, 50) as $item) {
+            $patchedIn = is_array($item) ? (string) ($item['patched_in'] ?? '') : '';
+
+            if (preg_match('/^\d[0-9A-Za-z.+-]{0,30}$/', $patchedIn) !== 1 || version_compare($patchedIn, $target, '>')) {
+                continue;
+            }
+
+            $cve = (string) ($item['cve'] ?? '');
+            $url = (string) ($item['url'] ?? '');
+            $severity = (string) ($item['severity'] ?? '');
+
+            $fixed[] = [
+                // Pipes would break the Markdown table of the pull request.
+                'title' => str_replace('|', '/', self::cleanTitle((string) ($item['title'] ?? ''))),
+                'cve' => preg_match('/^CVE-\d{4}-\d{1,7}$/', $cve) === 1 ? $cve : '',
+                'severity' => isset($rank[$severity]) ? $severity : '',
+                'patched_in' => $patchedIn,
+                'url' => preg_match('#^https://[A-Za-z0-9./?=_%:\#&-]{1,250}$#', $url) === 1 ? $url : '',
+            ];
+        }
+
+        usort($fixed, fn (array $a, array $b): int => ($rank[$b['severity']] ?? 0) <=> ($rank[$a['severity']] ?? 0));
+
+        return $fixed;
+    }
+
     public static function commitMessage(array $context): string
     {
+        if (($context['advisories'] ?? []) !== []) {
+            $lines = array_map(function (array $advisory): string {
+                $label = trim("{$advisory['severity']} {$advisory['cve']}");
+
+                return $label !== '' ? "- {$label}: {$advisory['title']}" : "- {$advisory['title']}";
+            }, $context['advisories']);
+
+            return self::subject($context)."\n\nSecurity fixes:\n".implode("\n", $lines)."\n";
+        }
+
         $fix = $context['cve'] !== ''
             ? "Security fix for {$context['cve']}".($context['severity'] !== '' ? " ({$context['severity']})" : '').'.'
             : 'Security fix.';
@@ -93,14 +141,32 @@ final class SecurityUpdate
             '|---|---|',
             "| Composant | `{$context['slug']}` ({$context['type']}) |",
             "| Version | {$context['from']} → {$context['to']} |",
-            "| Faille | {$flaw} |",
         ];
+        $advisories = $context['advisories'] ?? [];
 
-        if ($context['advisory_url'] !== '') {
-            $lines[] = "| Avis | {$context['advisory_url']} |";
+        if ($advisories === []) {
+            $lines[] = "| Faille | {$flaw} |";
+
+            if ($context['advisory_url'] !== '') {
+                $lines[] = "| Avis | {$context['advisory_url']} |";
+            }
         }
 
         $lines[] = '';
+
+        if ($advisories !== []) {
+            $lines[] = '### Failles corrigées ('.count($advisories).')';
+            $lines[] = '';
+            $lines[] = '| Sévérité | CVE | Faille | Corrigée en | Avis |';
+            $lines[] = '|---|---|---|---|---|';
+
+            foreach ($advisories as $advisory) {
+                $link = $advisory['url'] !== '' ? "[Avis]({$advisory['url']})" : '—';
+                $lines[] = '| '.($advisory['severity'] ?: '—').' | '.($advisory['cve'] ?: '—')." | {$advisory['title']} | {$advisory['patched_in']} | {$link} |";
+            }
+
+            $lines[] = '';
+        }
 
         if ($context['major_jump']) {
             $from = explode('.', $context['from'])[0];

@@ -124,4 +124,31 @@ check('annotation falls back to failed when no outcome was written',
     SecurityUpdate::annotation(null),
     '::notice title=security-update::{"status":"failed","reason":"Le workflow s\'est arrêté avant de produire un résultat : voir les logs.","pr_url":"","target_version":"","major_jump":false}');
 
+
+// advisories
+$advisories = json_encode([
+    ['title' => 'Yoast <= 28.5 - XSS', 'cve' => 'CVE-2026-11111', 'severity' => 'high', 'patched_in' => '28.6', 'url' => 'https://www.wordfence.com/a?x=1&y=2'],
+    ['title' => "Yoast <= 28.3 | CSRF\n", 'cve' => '', 'severity' => 'critical', 'patched_in' => '28.4', 'url' => ''],
+    ['title' => 'Yoast <= 28.9 - future', 'cve' => 'CVE-2026-22222', 'severity' => 'critical', 'patched_in' => '29.0', 'url' => ''],
+    ['title' => 'hostile', 'cve' => 'CVE-bad', 'severity' => 'urgent', 'patched_in' => '28.1', 'url' => 'javascript:alert(1)'],
+    'not an object',
+]);
+$fixed = SecurityUpdate::advisories($advisories, '28.6');
+check('advisories keeps only fixes shipped by the target version', count($fixed), 3);
+check('advisories sorts by severity', $fixed[0]['severity'], 'critical');
+check('advisories neutralises table pipes and control characters', $fixed[0]['title'], 'Yoast <= 28.3 / CSRF');
+check('advisories drops an invalid CVE, severity and URL', [$fixed[2]['cve'], $fixed[2]['severity'], $fixed[2]['url']], ['', '', '']);
+check('advisories keeps a valid URL', $fixed[1]['url'], 'https://www.wordfence.com/a?x=1&y=2');
+check('advisories tolerates garbage', SecurityUpdate::advisories('{oops', '28.6'), []);
+check('advisories tolerates an empty input', SecurityUpdate::advisories('', '28.6'), []);
+
+$withAdvisories = ['advisories' => $fixed, 'major_jump' => false, 'from' => '28.5', 'to' => '28.6'] + $context;
+check('commitMessage lists every fixed advisory',
+    SecurityUpdate::commitMessage($withAdvisories),
+    "chore(deps): upgrade WP-Members from 28.5 to 28.6\n\nSecurity fixes:\n- critical: Yoast <= 28.3 / CSRF\n- high CVE-2026-11111: Yoast <= 28.5 - XSS\n- hostile\n");
+$body = SecurityUpdate::prBody($withAdvisories);
+check('prBody announces the number of fixed advisories', str_contains($body, '### Failles corrigées (3)'), true);
+check('prBody links an advisory', str_contains($body, '[Avis](https://www.wordfence.com/a?x=1&y=2)'), true);
+check('prBody keeps the single flaw row without advisories', str_contains(SecurityUpdate::prBody($context), '| Faille | CVE-2026-12345 (critical) |'), true);
+
 exit($failures > 0 ? 1 : 0);
