@@ -416,4 +416,49 @@ final class WordPressUpdate
             default => null,
         };
     }
+
+    /** @param list<string> $files names in wp-content/languages: a locale counts as installed once its core .mo is there. */
+    public static function translationLocales(array $files): array
+    {
+        $locales = [];
+
+        foreach ($files as $file) {
+            if (preg_match('/^([a-z]{2,3}_[A-Z]{2}(?:_[a-z0-9]+)?)\.mo$/', (string) $file, $match) === 1) {
+                $locales[] = $match[1];
+            }
+        }
+
+        sort($locales);
+
+        return $locales;
+    }
+
+    public static function translationUrl(string $type, string $slug, string $version): ?string
+    {
+        if (! isset(self::COMPOSER_TYPES[$type]) || preg_match(self::SLUG_PATTERN, $slug) !== 1 || preg_match('/^[0-9][0-9A-Za-z.-]{0,30}$/D', $version) !== 1) {
+            return null;
+        }
+
+        return $type === 'core'
+            ? 'https://api.wordpress.org/translations/core/1.0/?version='.$version
+            : "https://api.wordpress.org/translations/{$type}s/1.0/?slug={$slug}&version={$version}";
+    }
+
+    /** The answer comes from the network: only a wordpress.org zip for an installed locale is kept. */
+    public static function translationPacks(array $api, array $locales): array
+    {
+        $packs = [];
+
+        foreach (is_array($api['translations'] ?? null) ? $api['translations'] : [] as $translation) {
+            $locale = is_array($translation) && is_string($translation['language'] ?? null) ? $translation['language'] : '';
+            $package = is_array($translation) && is_string($translation['package'] ?? null) ? $translation['package'] : '';
+
+            if (in_array($locale, $locales, true) && preg_match('#^https://downloads\.wordpress\.org/translation/[A-Za-z0-9._/-]+\.zip$#', $package) === 1) {
+                $packs[] = ['locale' => $locale, 'package' => $package];
+            }
+        }
+
+        return $packs;
+    }
+
 }

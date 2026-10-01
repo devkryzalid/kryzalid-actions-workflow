@@ -233,6 +233,46 @@ jobs:
             finish skipped "Rien à mettre à jour." ""
           fi
 
+          # Translations follow the updated packages, like update-wp.sh does locally; a repo that ignores
+          # wp-content/languages gets them from WordPress itself. Never blocks the pull request.
+          L10N=wp-content/languages
+          update_translations() {
+            local locales type slug version dest prefix locale url
+            locales=$($CLI translation-locales "$L10N")
+            [ -n "$locales" ] || return 0
+            while IFS=$'\t' read -r type slug version; do
+              case "$type" in
+                plugin) dest="$L10N/plugins"; prefix="$slug-" ;;
+                theme) dest="$L10N/themes"; prefix="$slug-" ;;
+                *) dest="$L10N"; prefix="" ;;
+              esac
+              url=$($CLI translation-url "$type" "$slug" "$version")
+              if [ -z "$url" ] || ! curl -fsS --max-time 20 -o "$RUNNER_TEMP/l10n.json" "$url"; then continue; fi
+              while read -r locale url; do
+                # The CLI prints an empty line when no locale has a pack.
+                if [ -z "$url" ] || ! curl -fsS --max-time 60 -o "$RUNNER_TEMP/l10n.zip" "$url"; then continue; fi
+                # A language pack is flat: any path would be written outside its folder.
+                unzip -Z1 "$RUNNER_TEMP/l10n.zip" | grep -q / && continue
+                mkdir -p "$dest"
+                # Script translations are named by a content hash: the previous version's files would stay behind.
+                find "$dest" -maxdepth 1 -name "${prefix}${locale}-*.json" -delete
+                unzip -qo "$RUNNER_TEMP/l10n.zip" -d "$dest"
+              done < <($CLI translation-packs "$RUNNER_TEMP/l10n.json" "$locales")
+            done < <(jq -r '.[] | select(.status == "updated") | [.type, .slug, .to] | @tsv' "$DONE")
+            if [ -n "$(git status --porcelain -- "$L10N")" ]; then
+              git add -A -- "$L10N"
+              git commit --quiet -m "chore(i18n): update translations" -- "$L10N"
+            fi
+          }
+          if [ -d "$L10N" ] && ! git check-ignore -q "$L10N/fr_FR.mo"; then
+            if ! update_translations; then
+              echo "::warning::Traductions non mises à jour : la PR part sans elles."
+              git reset --quiet -- "$L10N" 2>/dev/null || true
+              git checkout --quiet -- "$L10N" 2>/dev/null || true
+              git clean -fdq -- "$L10N" || true
+            fi
+          fi
+
           git push --quiet origin "$BRANCH"
           PUSHED=1
           $CLI pr-body "$DONE" "$ITEM_ID" "$AUTO_MERGE" > "$RUNNER_TEMP/pr-body.md"

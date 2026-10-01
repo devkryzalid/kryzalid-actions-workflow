@@ -28,6 +28,9 @@ echo match ($command) {
     'pr-title' => WordPressUpdate::prTitleMany($readJson($args[0])),
     'pr-body' => WordPressUpdate::prBodyMany($readJson($args[0]), WordPressUpdate::advisories((string) getenv('ADVISORIES'), '999999'), $args[1], ($args[2] ?? '') === 'true'),
     'result' => WordPressUpdate::result($args[0], $args[1] ?? '', $args[2] ?? '', is_file($args[3] ?? '') ? $readJson($args[3]) : [], $args[4] ?? 'not_requested', $args[5] ?? ''),
+    'translation-locales' => implode(' ', WordPressUpdate::translationLocales(is_dir($args[0] ?? '') ? scandir($args[0]) : [])),
+    'translation-url' => (string) WordPressUpdate::translationUrl($args[0] ?? '', $args[1] ?? '', $args[2] ?? ''),
+    'translation-packs' => implode("\n", array_map(fn (array $pack): string => "{$pack['locale']} {$pack['package']}", WordPressUpdate::translationPacks((array) json_decode(is_file($args[0] ?? '') ? (string) file_get_contents($args[0]) : '', true), explode(' ', $args[1] ?? '')))),
     'annotation' => WordPressUpdate::annotation(is_file($args[0] ?? '') ? (string) file_get_contents($args[0]) : null),
     default => throw new InvalidArgumentException("Unknown command: {$command}"),
 }, "\n";
