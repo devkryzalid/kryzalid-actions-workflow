@@ -1,0 +1,377 @@
+name: Update WordPress
+
+on:
+  workflow_call:
+    inputs:
+      production_branch:
+        description: "Branche déployée en production (main ou master)"
+        required: true
+        type: string
+      staging_branch:
+        description: "Branche déployée en staging, dans laquelle la branche de MAJ est aussi mergée. Vide = pas de staging"
+        required: false
+        type: string
+        default: ""
+      dev_branch:
+        description: "Branche de travail remise à jour après le merge de la MAJ en production"
+        required: false
+        type: string
+        default: "dev"
+      php_version:
+        description: "Version PHP du serveur de production : une version de plugin qui exige plus doit échouer ici, pas au déploiement"
+        required: false
+        type: string
+        default: "8.3"
+      tools_ref:
+        description: "Ref de kryzalid-actions-workflow d'ou lire les scripts PHP : a aligner sur la ref du uses: quand on teste une branche"
+        required: false
+        type: string
+        default: "main"
+    secrets:
+      SECURITY_BOT_CLIENT_ID:
+        required: true
+      SECURITY_BOT_PRIVATE_KEY:
+        required: true
+      COMPOSER_AUTH:
+        required: false
+
+permissions:
+  contents: read
+
+# No concurrency group: GitHub keeps a single pending run per group and cancels the others.
+
+jobs:
+  update:
+    # Default branch only: a dispatch on another branch would run an unreviewed caller.
+    if: github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    # Under Kryzawatch's 60 min: past that, it fails the item while the run could still open a PR.
+    timeout-minutes: 45
+    env:
+      # In a reusable workflow, `inputs` holds workflow_call inputs: the dispatch inputs live in github.event.inputs.
+      ITEM_ID: ${{ github.event.inputs.item_id }}
+      PACKAGES: ${{ github.event.inputs.packages }}
+      ADVISORIES: ${{ github.event.inputs.advisories }}
+      AUTO_MERGE: ${{ github.event.inputs.auto_merge }}
+      PRODUCTION_BRANCH: ${{ inputs.production_branch }}
+      STAGING_BRANCH: ${{ inputs.staging_branch }}
+    steps:
+      # Dispatch inputs only ever reach scripts through env: never interpolate them in run blocks.
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::Input invalide : $1"; exit 1; }
+          [[ "$ITEM_ID" =~ ^[0-9]+$ ]] || fail item_id
+          [[ "$AUTO_MERGE" =~ ^(true)?$ ]] || fail auto_merge
+          # Parsed and filtered by the PHP script; only the size is bounded here.
+          [ "${#PACKAGES}" -le 20000 ] || fail packages
+          [ "${#ADVISORIES}" -le 20000 ] || fail advisories
+
+      # First: an App or secret failure must still find the CLI to report its result.
+      - name: Checkout update tools
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Public repository: no token, so the write-capable bot needs no access to the shared workflows.
+          repository: ${{ github.repository_owner }}/kryzalid-actions-workflow
+          ref: ${{ inputs.tools_ref }}
+          persist-credentials: false
+          path: tools
+          sparse-checkout: .github/scripts/wordpress-update
+
+      - name: GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SECURITY_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Checkout site
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.production_branch }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          path: site
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ inputs.php_version }}
+          tools: composer
+          coverage: none
+
+      - name: Update the packages
+        shell: bash
+        working-directory: site
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          COMPOSER_AUTH: ${{ secrets.COMPOSER_AUTH }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          CLI="php $GITHUB_WORKSPACE/tools/.github/scripts/wordpress-update/cli.php"
+          RESULT="$RUNNER_TEMP/result.json"
+          DONE="$RUNNER_TEMP/packages.json"
+          echo '[]' > "$DONE"
+          # Command output is untrusted: it could forge the kryzawatch-update annotation or other workflow commands.
+          STOP_TOKEN=$(openssl rand -hex 16)
+          print_untrusted() { echo "::stop-commands::$STOP_TOKEN"; echo "$1"; echo "::$STOP_TOKEN::"; }
+          AUTO_STATE=not_requested
+          AUTO_REASON=""
+          [ "$AUTO_MERGE" = true ] && AUTO_STATE=pending
+          finish() { $CLI result "$1" "$2" "$3" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"; exit 0; }
+          refuse() { [ "$AUTO_STATE" = pending ] && { AUTO_STATE=refused; AUTO_REASON="$1"; }; return 0; }
+          abort() { refuse "$1"; $CLI result failed "$1" "" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"; exit 1; }
+          PR_URL=""
+          BRANCH=""
+          PUSHED=0
+          # Any unexpected failure still leaves a result; a pushed branch without a PR would block every later run.
+          # shellcheck disable=SC2329
+          on_exit() {
+            local code=$?
+            set +e
+            if [ "$code" -eq 0 ] || [ -s "$RESULT" ]; then return 0; fi
+            refuse "Le workflow a été interrompu."
+            if [ -n "$PR_URL" ]; then
+              $CLI result pr_opened "" "$PR_URL" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"
+            else
+              $CLI result failed "Interrompu avant l'ouverture de la PR." "" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"
+              # Only a branch this run pushed: another run's branch is that run's open PR.
+              if [ "$PUSHED" -eq 1 ]; then git push --quiet origin --delete "$BRANCH" 2>/dev/null; fi
+            fi
+            return 0
+          }
+          trap 'on_exit' EXIT
+          record() {
+            jq -c --arg type "$TYPE" --arg slug "$SLUG" --arg title "$TITLE" --arg package "${PACKAGE:-}" \
+              --arg from "${FROM:-}" --arg to "${TO:-}" --arg status "$1" --arg reason "${2:-}" --argjson major "${MAJOR_JUMP:-false}" \
+              '. + [{type: $type, slug: $slug, title: $title, package: $package, from: $from, to: $to, status: $status, reason: $reason, major_jump: $major}]' \
+              "$DONE" > "$DONE.tmp" && mv "$DONE.tmp" "$DONE"
+          }
+          revert() { git checkout --quiet -- composer.json composer.lock; }
+
+          PARSED=$($CLI packages "$PACKAGES")
+          [ "$(jq -r .status <<<"$PARSED")" = ok ] || abort "$(jq -r .reason <<<"$PARSED")"
+          COUNT=$(jq '.packages | length' <<<"$PARSED")
+
+          if [ "$AUTO_STATE" = pending ]; then
+            [ "$COUNT" -eq 1 ] || refuse "Merge automatique réservé à un seul paquet."
+            [ -n "$(jq -r '.packages[0].patched_in' <<<"$PARSED")" ] || refuse "Version corrigée inconnue."
+          fi
+
+          # Captured first: with pipefail, grep -q closing the pipe early would make the match look like a failure.
+          BRANCHES=$(git ls-remote --heads origin | awk '{print $2}')
+          OPEN=$(grep -E '^refs/heads/kryzawatch/update-[0-9]+$' <<<"$BRANCHES" | sed 's#^refs/heads/##' | paste -sd ' ' - || true)
+          if [ -n "$OPEN" ]; then
+            refuse "PR Kryzawatch déjà ouverte ($OPEN)."
+            finish skipped "Une PR Kryzawatch est déjà ouverte sur ce dépôt ($OPEN)." ""
+          fi
+
+          BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+          BRANCH="kryzawatch/update-${ITEM_ID}"
+          git switch --quiet -c "$BRANCH"
+
+          for i in $(seq 0 $((COUNT - 1))); do
+            export TYPE SLUG TITLE PATCHED_IN PACKAGE="" FROM="" TO="" MAJOR_JUMP=false
+            TYPE=$(jq -r ".packages[$i].type" <<<"$PARSED")
+            SLUG=$(jq -r ".packages[$i].slug" <<<"$PARSED")
+            TITLE=$(jq -r ".packages[$i].title" <<<"$PARSED")
+            PATCHED_IN=$(jq -r ".packages[$i].patched_in" <<<"$PARSED")
+
+            RESOLVED=$($CLI resolve composer.lock "$TYPE" "$SLUG")
+            if [ "$(jq -r .status <<<"$RESOLVED")" != ok ]; then
+              record skipped "$(jq -r .reason <<<"$RESOLVED")"; refuse "Paquet hors Composer."; continue
+            fi
+            PACKAGE=$(jq -r .package <<<"$RESOLVED")
+            FROM=$(jq -r .installed <<<"$RESOLVED")
+
+            if ! composer show "$PACKAGE" --all --format=json --no-interaction > "$RUNNER_TEMP/versions.json"; then
+              record failed "Impossible de lister les versions de $PACKAGE (identifiants Composer ?)."; refuse "Versions illisibles."; continue
+            fi
+
+            if [ "$AUTO_STATE" = pending ]; then
+              TO=$($CLI pick-fix "$RUNNER_TEMP/versions.json" "$FROM" "$PATCHED_IN")
+              [ -n "$TO" ] || refuse "La plus petite version corrigée change de version mineure : relecture humaine."
+            fi
+            if [ -z "$TO" ]; then
+              PICK=$($CLI pick "$RUNNER_TEMP/versions.json" "$FROM" "$PATCHED_IN")
+              if [ "$(jq -r .status <<<"$PICK")" != ok ]; then
+                record "$(jq -r .status <<<"$PICK")" "$(jq -r .reason <<<"$PICK")"; refuse "$(jq -r .reason <<<"$PICK")"; continue
+              fi
+              TO=$(jq -r .target <<<"$PICK")
+              MAJOR_JUMP=$(jq -r .major_jump <<<"$PICK")
+            fi
+
+            if ! OUT=$(composer require "${PACKAGE}:${TO}" --update-with-dependencies --no-interaction 2>&1); then
+              print_untrusted "$OUT"; revert; record failed "composer require a échoué : $(tail -n 5 <<<"$OUT")"; refuse "composer require a échoué."; continue
+            fi
+            if ! composer validate --no-check-publish --no-interaction; then
+              revert; record failed "composer validate a échoué."; refuse "composer validate a échoué."; continue
+            fi
+            DIR=$(composer show "$PACKAGE" --path | awk '{print $2}')
+            if ! LINT=$(find "$DIR" -name '*.php' -print0 | xargs -0 -n 1 -P 8 php -l 2>&1); then
+              ERRORS=$(grep -v '^No syntax errors' <<<"$LINT" || true)
+              print_untrusted "$ERRORS"; revert; record failed "php -l a échoué : $(head -n 3 <<<"$ERRORS")"; refuse "php -l a échoué."; continue
+            fi
+            CHANGED=$(git status --porcelain | awk '{print $2}' | sort | tr '\n' ' ')
+            if [ "$CHANGED" != "composer.json composer.lock " ]; then
+              revert; record failed "Le diff touche d'autres fichiers que composer.json/lock : $CHANGED"; refuse "Diff inattendu."; continue
+            fi
+
+            $CLI commit-message > "$RUNNER_TEMP/commit-message.txt"
+            git commit --quiet -F "$RUNNER_TEMP/commit-message.txt" -- composer.json composer.lock
+            record updated ""
+          done
+
+          if [ "$(git rev-list --count "origin/${PRODUCTION_BRANCH}..HEAD")" -eq 0 ]; then
+            refuse "Aucune mise à jour appliquée."
+            finish skipped "Rien à mettre à jour." ""
+          fi
+
+          git push --quiet origin "$BRANCH"
+          PUSHED=1
+          $CLI pr-body "$DONE" "$ITEM_ID" "$AUTO_MERGE" > "$RUNNER_TEMP/pr-body.md"
+          PR_URL=$(gh pr create --base "$PRODUCTION_BRANCH" --head "$BRANCH" --title "$($CLI pr-title "$DONE")" --body-file "$RUNNER_TEMP/pr-body.md")
+
+          if [ -n "$STAGING_BRANCH" ]; then
+            if ! git fetch --quiet origin "$STAGING_BRANCH"; then
+              gh pr comment "$PR_URL" --body "Impossible de récupérer \`$STAGING_BRANCH\` : pas de déploiement en staging, à faire à la main." || true
+              refuse "Staging non mis à jour : relecture humaine."
+            else
+              git switch --quiet -c staging-merge "origin/$STAGING_BRANCH"
+              if git merge --no-ff -m "Merge branch '$BRANCH' into $STAGING_BRANCH" "$BRANCH"; then
+                if git push --quiet origin "HEAD:$STAGING_BRANCH"; then
+                  gh pr comment "$PR_URL" --body "Mergée dans \`$STAGING_BRANCH\` : déploiement en staging lancé. Vérifier le staging avant de merger." || true
+                else
+                  gh pr comment "$PR_URL" --body "Le push vers \`$STAGING_BRANCH\` a échoué : pas de déploiement en staging, à faire à la main." || true
+                  refuse "Staging non mis à jour : relecture humaine."
+                fi
+              else
+                git merge --abort || true
+                gh pr comment "$PR_URL" --body "Conflit en mergeant dans \`$STAGING_BRANCH\` : pas de déploiement en staging, à faire à la main." || true
+                refuse "Conflit de merge dans le staging : relecture humaine."
+              fi
+              git switch --quiet "$BRANCH"
+            fi
+          fi
+
+          if [ "$AUTO_STATE" = pending ]; then
+            # No build.yml or an unreadable one leaves the JSON empty: the smoke test then counts as off.
+            yq -o=json '.jobs // {}' .github/workflows/build.yml > "$RUNNER_TEMP/build-jobs.json" 2>/dev/null || : > "$RUNNER_TEMP/build-jobs.json"
+            [ "$($CLI smoke "$RUNNER_TEMP/build-jobs.json")" = true ] || refuse "Smoke test inactif sur un déploiement de production de build.yml."
+          fi
+          if [ "$AUTO_STATE" = pending ]; then
+            [ "$($CLI hours)" = true ] || refuse "Hors heures ouvrées (lun-ven, 8 h - 18 h, heure de Montréal)."
+          fi
+          if [ "$AUTO_STATE" = pending ]; then
+            # A PR just created can still be computing its mergeability.
+            for attempt in 1 2 3; do
+              if OUT=$(gh pr merge "$PR_URL" --merge 2>&1); then
+                AUTO_STATE=merged
+                break
+              fi
+              [ "$attempt" -eq 3 ] || sleep 5
+            done
+            if [ "$AUTO_STATE" != merged ]; then
+              print_untrusted "$OUT"; refuse "GitHub a refusé le merge : $(tail -n 1 <<<"$OUT")"
+            fi
+          fi
+
+          finish pr_opened "" "$PR_URL"
+
+      - name: Report result
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/tools/.github/scripts/wordpress-update/cli.php" ]; then
+            php "$GITHUB_WORKSPACE/tools/.github/scripts/wordpress-update/cli.php" annotation "$RUNNER_TEMP/result.json"
+          fi
+
+  # A leftover kryzawatch/update-* branch reads as "PR in progress" and would skip every later run.
+  cleanup:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.action == 'closed'
+      && startsWith(github.event.pull_request.head.ref, 'kryzawatch/update-')
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SECURITY_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Delete the update branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # 422: already gone (deleted by hand or by the repository setting).
+          if ! OUT=$(gh api -X DELETE "repos/$REPOSITORY/git/refs/heads/$BRANCH" 2>&1); then
+            if ! grep -q "HTTP 422" <<<"$OUT"; then
+              STOP_TOKEN=$(openssl rand -hex 16)
+              echo "::stop-commands::$STOP_TOKEN"; echo "$OUT"; echo "::$STOP_TOKEN::"
+              exit 1
+            fi
+          fi
+          echo "Branche $BRANCH supprimée."
+
+  merge-back:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.action == 'closed'
+      && github.event.pull_request.merged == true
+      && startsWith(github.event.pull_request.head.ref, 'kryzawatch/update-')
+      && github.event.pull_request.base.ref == inputs.production_branch
+    runs-on: ubuntu-latest
+    env:
+      PRODUCTION_BRANCH: ${{ inputs.production_branch }}
+      DEV_BRANCH: ${{ inputs.dev_branch }}
+    steps:
+      - name: GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SECURITY_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Checkout dev
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.dev_branch }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Merge production into dev
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git fetch --quiet origin "$PRODUCTION_BRANCH"
+          if git merge --no-ff -m "Merge branch '$PRODUCTION_BRANCH' into $DEV_BRANCH" "origin/$PRODUCTION_BRANCH"; then
+            git push --quiet origin "HEAD:$DEV_BRANCH"
+          else
+            git merge --abort || true
+            gh pr create --base "$DEV_BRANCH" --head "$PRODUCTION_BRANCH" \
+              --title "chore: merge $PRODUCTION_BRANCH into $DEV_BRANCH" \
+              --body "Conflit après la mise à jour : \`$DEV_BRANCH\` doit être remise à jour à la main."
+          fi

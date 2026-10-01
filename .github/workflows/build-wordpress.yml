@@ -17,6 +17,16 @@ on:
         required: false
         type: string
         default: ""
+      smoke_test:
+        description: "En production, verifie apres le deploiement que chaque chemin de smoke_test_paths repond 200 sans erreur fatale. Exige site_url"
+        required: false
+        type: boolean
+        default: false
+      smoke_test_paths:
+        description: "Chemins verifies par le smoke test, separes par des espaces"
+        required: false
+        type: string
+        default: "/ /wp-login.php"
     secrets:
       # Secrets de staging
       SSH_PRIVATE_KEY_STAGING:
@@ -326,6 +336,49 @@ jobs:
 
           echo "✅ Déploiement terminé."
           BASH
+
+      # Production only: staging sites often sit behind HTTP authentication.
+      - name: Smoke test
+        if: inputs.smoke_test && inputs.environment == 'production'
+        shell: bash
+        env:
+          SITE_URL: ${{ inputs.site_url }}
+          SMOKE_PATHS: ${{ inputs.smoke_test_paths }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$SITE_URL" ]; then
+            echo "❌ smoke_test exige l'input site_url."
+            exit 1
+          fi
+
+          FAILED=""
+          for path in $SMOKE_PATHS; do
+            reason=""
+            for attempt in 1 2 3; do
+              # Cache-busting parameter: a page cache would otherwise answer for a broken PHP stack.
+              body="$(curl -sL -A 'kryzalid-deploy-check' --max-time 20 -w '\n%{http_code}' "${SITE_URL%/}${path}?kryzalid_smoke=${GITHUB_RUN_ID:-local}-${attempt}" || printf '\n000')"
+              status="${body##*$'\n'}"
+              if [ "$status" = "200" ] && ! grep -qiE 'critical error|erreur critique|Fatal error' <<<"$body"; then
+                reason=""
+                break
+              fi
+              [ "$status" = "200" ] && reason="erreur fatale dans la page" || reason="HTTP $status"
+              [ "$attempt" -lt 3 ] && sleep "${SMOKE_RETRY_DELAY:-10}"
+            done
+
+            if [ -n "$reason" ]; then
+              echo "❌ $path : $reason"
+              FAILED="$FAILED $path"
+            else
+              echo "✅ $path"
+            fi
+          done
+
+          if [ -n "$FAILED" ]; then
+            echo "Site cassé après déploiement :$FAILED. Retour arrière : git revert du dernier commit sur ${GITHUB_REF_NAME:-la branche de prod}."
+            exit 1
+          fi
 
   notify:
     needs: build
