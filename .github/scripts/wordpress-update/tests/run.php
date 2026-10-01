@@ -311,4 +311,32 @@ check('pickFix refuses a fix older than the installed version',
     WordPressUpdate::pickFix(['3.4.5', '3.4.8', '3.4.9'], '3.4.8', '3.4.5'),
     null);
 
+// translations
+check('translationLocales keeps the core language files only',
+    WordPressUpdate::translationLocales(['fr_CA.mo', 'fr_FR.mo', 'admin-fr_CA.mo', 'continents-cities-fr_FR.mo', 'fr_CA.po', 'de_DE_formal.mo', 'pt_BR.l10n.php', 'plugins', 'en.mo']),
+    ['de_DE_formal', 'fr_CA', 'fr_FR']);
+check('translationUrl for a plugin',
+    WordPressUpdate::translationUrl('plugin', 'better-wp-security', '10.0.5'),
+    'https://api.wordpress.org/translations/plugins/1.0/?slug=better-wp-security&version=10.0.5');
+check('translationUrl for a theme',
+    WordPressUpdate::translationUrl('theme', 'astra', '4.1.0'),
+    'https://api.wordpress.org/translations/themes/1.0/?slug=astra&version=4.1.0');
+check('translationUrl for the core ignores the slug',
+    WordPressUpdate::translationUrl('core', 'wordpress', '7.1.2'),
+    'https://api.wordpress.org/translations/core/1.0/?version=7.1.2');
+check('translationUrl refuses a slug or a version outside the allowed characters',
+    [WordPressUpdate::translationUrl('plugin', '../x', '1.0'), WordPressUpdate::translationUrl('plugin', 'x', '1.0&slug=y'), WordPressUpdate::translationUrl('plugin', 'x', "1.0\n")],
+    [null, null, null]);
+$api = ['translations' => [
+    ['language' => 'fr_FR', 'package' => 'https://downloads.wordpress.org/translation/plugin/x/1.0/fr_FR.zip'],
+    ['language' => 'de_DE', 'package' => 'https://downloads.wordpress.org/translation/plugin/x/1.0/de_DE.zip'],
+    ['language' => 'fr_CA', 'package' => 'https://evil.example/fr_CA.zip'],
+]];
+check('translationPacks keeps the installed locales with a wordpress.org package',
+    WordPressUpdate::translationPacks($api, ['fr_CA', 'fr_FR']),
+    [['locale' => 'fr_FR', 'package' => 'https://downloads.wordpress.org/translation/plugin/x/1.0/fr_FR.zip']]);
+check('translationPacks survives a malformed answer',
+    [WordPressUpdate::translationPacks([], ['fr_FR']), WordPressUpdate::translationPacks(['translations' => [['language' => ['x']], 'y']], ['fr_FR'])],
+    [[], []]);
+
 exit($failures > 0 ? 1 : 0);
