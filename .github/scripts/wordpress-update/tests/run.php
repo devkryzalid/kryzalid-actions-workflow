@@ -131,6 +131,49 @@ check('annotation falls back to failed when no result was written',
     WordPressUpdate::annotation(null),
     '::notice title=kryzawatch-update::{"status":"failed","reason":"Le workflow s\'est arrêté avant de produire un résultat : voir les logs.","pr_url":"","packages":[],"auto_merge":"not_requested","auto_merge_reason":""}');
 
+check('annotation treats an empty result like a missing one',
+    WordPressUpdate::annotation(" \n"), WordPressUpdate::annotation(null));
+check('annotation substitutes invalid UTF-8 instead of throwing',
+    str_contains(WordPressUpdate::annotation(WordPressUpdate::result('failed', "bad \xC3", '', [], 'not_requested', '')), "\"reason\":\"bad \u{FFFD}\""), true);
+check('annotation drops title and package from the packages',
+    WordPressUpdate::annotation(WordPressUpdate::result('pr_opened', '', 'https://github.com/o/r/pull/1', [['type' => 'plugin', 'slug' => 'a', 'title' => 'A', 'package' => 'wpackagist-plugin/a', 'from' => '1.0', 'to' => '1.1', 'status' => 'updated', 'reason' => '', 'major_jump' => false]], 'not_requested', '')),
+    '::notice title=kryzawatch-update::{"status":"pr_opened","reason":"","pr_url":"https://github.com/o/r/pull/1","packages":[{"type":"plugin","slug":"a","from":"1.0","to":"1.1","status":"updated","reason":"","major_jump":false}],"auto_merge":"not_requested","auto_merge_reason":""}');
+
+// The runner cuts annotation messages at 4096 characters.
+$decodeAnnotation = fn (string $line): ?array => json_decode(rawurldecode(substr($line, strlen('::notice title=kryzawatch-update::'))), true);
+$bulk = [];
+for ($i = 0; $i < 47; $i++) {
+    $bulk[] = ['type' => 'plugin', 'slug' => str_pad("plugin-{$i}-", 25, 'x'), 'title' => str_repeat('T', 120), 'package' => 'wpackagist-plugin/'.str_pad("plugin-{$i}-", 25, 'x'), 'from' => '10.12.3', 'to' => '10.12.4', 'status' => 'updated', 'reason' => '', 'major_jump' => $i === 0];
+}
+for ($i = 0; $i < 3; $i++) {
+    $bulk[] = ['type' => 'theme', 'slug' => "broken-{$i}", 'title' => 'Broken', 'package' => '', 'from' => '1.0', 'to' => '', 'status' => 'failed', 'reason' => str_repeat("composer require a échoué 100%\n", 40), 'major_jump' => false];
+}
+$line = WordPressUpdate::annotation(WordPressUpdate::result('pr_opened', str_repeat('r', 3000), 'https://github.com/devkryzalid/q2-guiderc/pull/1234', $bulk, 'refused', str_repeat('m', 3000)));
+$decoded = $decodeAnnotation($line);
+$keptUpdated = array_values(array_filter($decoded['packages'] ?? [], fn (array $package): bool => $package['status'] === 'updated'));
+check('annotation of 50 packages stays under the runner limit', strlen($line) <= 4096, true);
+check('annotation of 50 packages is valid JSON', is_array($decoded), true);
+check('annotation keeps the leading updated packages in order with slug and to',
+    array_map(fn (array $package): array => [$package['slug'], $package['to']], $keptUpdated),
+    array_map(fn (array $package): array => [$package['slug'], $package['to']], array_slice($bulk, 0, count($keptUpdated))));
+check('annotation counts every dropped package in omitted', count($decoded['packages'] ?? []) + ($decoded['omitted'] ?? 0), 50);
+check('annotation keeps most updated packages (38 here)', count($keptUpdated), 38);
+check('annotation keeps the top-level fields', [$decoded['status'], $decoded['pr_url'], $decoded['auto_merge'], mb_strlen($decoded['reason']), mb_strlen($decoded['auto_merge_reason'])],
+    ['pr_opened', 'https://github.com/devkryzalid/q2-guiderc/pull/1234', 'refused', 200, 200]);
+check('annotation caps package reasons at 200 characters',
+    mb_strlen($decodeAnnotation(WordPressUpdate::annotation(WordPressUpdate::result('failed', '', '', [$bulk[47]], 'not_requested', '')))['packages'][0]['reason']), 200);
+
+$absurd = array_map(fn (int $i): array => ['type' => 'plugin', 'slug' => str_pad((string) $i, 100, 'z'), 'from' => str_repeat('9', 64), 'to' => str_repeat('9', 64), 'status' => 'updated', 'reason' => '', 'major_jump' => true], range(1, 50));
+$line = WordPressUpdate::annotation(WordPressUpdate::result('pr_opened', '%%%%', 'https://github.com/o/r/pull/1', $absurd, 'not_requested', ''));
+$decoded = $decodeAnnotation($line);
+check('annotation of absurd input stays under the runner limit', strlen($line) <= 4096, true);
+check('annotation of absurd input is valid JSON with every package accounted for', is_array($decoded) ? count($decoded['packages']) + $decoded['omitted'] : null, 50);
+$line = WordPressUpdate::annotation(WordPressUpdate::result('pr_opened', '', 'https://github.com/o/r/pull/'.str_repeat('1', 3600), $absurd, 'merged', ''));
+check('annotation of a last resort stays under the runner limit', strlen($line) <= 4096, true);
+check('annotation falls back to a truncated result as a last resort',
+    array_intersect_key($decodeAnnotation($line) ?? [], array_flip(['reason', 'packages', 'omitted', 'auto_merge'])),
+    ['reason' => 'Résultat tronqué : voir la PR.', 'packages' => [], 'omitted' => 50, 'auto_merge' => 'merged']);
+
 // packages
 check('packages accepts a valid list',
     WordPressUpdate::packages('[{"type":"plugin","slug":"wp-members","title":"WP-Members","patched_in":"3.5.8"},{"type":"core","slug":"wordpress","title":"WordPress","patched_in":""}]'),
@@ -184,16 +227,31 @@ check('pickFix refuses an empty patched_in',
     WordPressUpdate::pickFix(['3.4.9'], '3.4.8', ''),
     null);
 
-// smokeTestEnabled
-check('smoke test detected in a caller build.yml',
-    WordPressUpdate::smokeTestEnabled("jobs:\n  prod:\n    with:\n      smoke_test: true\n      site_url: https://x.ca\n"),
-    true);
-check('smoke test off when false',
-    WordPressUpdate::smokeTestEnabled("      smoke_test: false\n"),
-    false);
-check('smoke test off when only commented',
-    WordPressUpdate::smokeTestEnabled("      # smoke_test: true\n"),
-    false);
+// smokeTestEnabled reads the decoded `jobs` map of the caller's build.yml
+$prod = fn (array $with): array => ['uses' => 'KRYZALID/kryzalid-actions-workflow/.github/workflows/build-wordpress.yml@main', 'with' => $with];
+check('smoke test on with a production job running it against a URL',
+    WordPressUpdate::smokeTestEnabled([
+        'staging' => $prod(['environment' => 'staging']),
+        'production' => $prod(['environment' => 'production', 'smoke_test' => true, 'site_url' => 'https://x.ca']),
+    ]), true);
+check('smoke test on with the string true',
+    WordPressUpdate::smokeTestEnabled(['production' => $prod(['environment' => 'production', 'smoke_test' => 'true', 'site_url' => 'https://x.ca'])]), true);
+check('smoke test off when only staging runs it',
+    WordPressUpdate::smokeTestEnabled([
+        'staging' => $prod(['environment' => 'staging', 'smoke_test' => true, 'site_url' => 'https://staging.x.ca']),
+        'production' => $prod(['environment' => 'production']),
+    ]), false);
+check('smoke test off without site_url',
+    WordPressUpdate::smokeTestEnabled(['production' => $prod(['environment' => 'production', 'smoke_test' => true, 'site_url' => ' '])]), false);
+check('smoke test off when one of two production jobs skips it',
+    WordPressUpdate::smokeTestEnabled([
+        'production-a' => $prod(['environment' => 'production', 'smoke_test' => true, 'site_url' => 'https://a.ca']),
+        'production-b' => $prod(['environment' => 'production', 'smoke_test' => false, 'site_url' => 'https://b.ca']),
+    ]), false);
+check('smoke test off without a production job',
+    WordPressUpdate::smokeTestEnabled(['staging' => $prod(['environment' => 'staging', 'smoke_test' => true, 'site_url' => 'https://x.ca'])]), false);
+check('smoke test off on an empty or malformed jobs map',
+    [WordPressUpdate::smokeTestEnabled([]), WordPressUpdate::smokeTestEnabled(['x' => 'y'])], [false, false]);
 
 // withinBusinessHours
 $tz = new DateTimeZone('America/Toronto');

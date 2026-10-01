@@ -45,6 +45,8 @@ jobs:
     # Default branch only: a dispatch on another branch would run an unreviewed caller.
     if: github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
+    # Under Kryzawatch's 60 min: past that, it fails the item while the run could still open a PR.
+    timeout-minutes: 45
     env:
       # In a reusable workflow, `inputs` holds workflow_call inputs: the dispatch inputs live in github.event.inputs.
       ITEM_ID: ${{ github.event.inputs.item_id }}
@@ -66,6 +68,17 @@ jobs:
           [ "${#PACKAGES}" -le 20000 ] || fail packages
           [ "${#ADVISORIES}" -le 20000 ] || fail advisories
 
+      # First: an App or secret failure must still find the CLI to report its result.
+      - name: Checkout update tools
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Public repository: no token, so the write-capable bot needs no access to the shared workflows.
+          repository: ${{ github.repository_owner }}/kryzalid-actions-workflow
+          ref: ${{ inputs.tools_ref }}
+          persist-credentials: false
+          path: tools
+          sparse-checkout: .github/scripts/wordpress-update
+
       - name: GitHub App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -82,16 +95,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
           path: site
-
-      - name: Checkout update tools
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # Public repository: no token, so the write-capable bot needs no access to the shared workflows.
-          repository: ${{ github.repository_owner }}/kryzalid-actions-workflow
-          ref: ${{ inputs.tools_ref }}
-          persist-credentials: false
-          path: tools
-          sparse-checkout: .github/scripts/wordpress-update
 
       - name: Setup PHP
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
@@ -113,6 +116,9 @@ jobs:
           RESULT="$RUNNER_TEMP/result.json"
           DONE="$RUNNER_TEMP/packages.json"
           echo '[]' > "$DONE"
+          # Command output is untrusted: it could forge the kryzawatch-update annotation or other workflow commands.
+          STOP_TOKEN=$(openssl rand -hex 16)
+          print_untrusted() { echo "::stop-commands::$STOP_TOKEN"; echo "$1"; echo "::$STOP_TOKEN::"; }
           AUTO_STATE=not_requested
           AUTO_REASON=""
           [ "$AUTO_MERGE" = true ] && AUTO_STATE=pending
@@ -121,6 +127,7 @@ jobs:
           abort() { refuse "$1"; $CLI result failed "$1" "" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"; exit 1; }
           PR_URL=""
           BRANCH=""
+          PUSHED=0
           # Any unexpected failure still leaves a result; a pushed branch without a PR would block every later run.
           # shellcheck disable=SC2329
           on_exit() {
@@ -132,7 +139,8 @@ jobs:
               $CLI result pr_opened "" "$PR_URL" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"
             else
               $CLI result failed "Interrompu avant l'ouverture de la PR." "" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"
-              if [ -n "$BRANCH" ]; then git push --quiet origin --delete "$BRANCH" 2>/dev/null; fi
+              # Only a branch this run pushed: another run's branch is that run's open PR.
+              if [ "$PUSHED" -eq 1 ]; then git push --quiet origin --delete "$BRANCH" 2>/dev/null; fi
             fi
             return 0
           }
@@ -156,9 +164,10 @@ jobs:
 
           # Captured first: with pipefail, grep -q closing the pipe early would make the match look like a failure.
           BRANCHES=$(git ls-remote --heads origin | awk '{print $2}')
-          if grep -qE '^refs/heads/kryzawatch/update-[0-9]+$' <<<"$BRANCHES"; then
-            refuse "PR Kryzawatch déjà ouverte."
-            finish skipped "Une PR Kryzawatch est déjà ouverte sur ce dépôt." ""
+          OPEN=$(grep -E '^refs/heads/kryzawatch/update-[0-9]+$' <<<"$BRANCHES" | sed 's#^refs/heads/##' | paste -sd ' ' - || true)
+          if [ -n "$OPEN" ]; then
+            refuse "PR Kryzawatch déjà ouverte ($OPEN)."
+            finish skipped "Une PR Kryzawatch est déjà ouverte sur ce dépôt ($OPEN)." ""
           fi
 
           BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
@@ -199,7 +208,7 @@ jobs:
             fi
 
             if ! OUT=$(composer require "${PACKAGE}:${TO}" --update-with-dependencies --no-interaction 2>&1); then
-              echo "$OUT"; revert; record failed "composer require a échoué : $(tail -n 5 <<<"$OUT")"; refuse "composer require a échoué."; continue
+              print_untrusted "$OUT"; revert; record failed "composer require a échoué : $(tail -n 5 <<<"$OUT")"; refuse "composer require a échoué."; continue
             fi
             if ! composer validate --no-check-publish --no-interaction; then
               revert; record failed "composer validate a échoué."; refuse "composer validate a échoué."; continue
@@ -207,7 +216,7 @@ jobs:
             DIR=$(composer show "$PACKAGE" --path | awk '{print $2}')
             if ! LINT=$(find "$DIR" -name '*.php' -print0 | xargs -0 -n 1 -P 8 php -l 2>&1); then
               ERRORS=$(grep -v '^No syntax errors' <<<"$LINT" || true)
-              echo "$ERRORS"; revert; record failed "php -l a échoué : $(head -n 3 <<<"$ERRORS")"; refuse "php -l a échoué."; continue
+              print_untrusted "$ERRORS"; revert; record failed "php -l a échoué : $(head -n 3 <<<"$ERRORS")"; refuse "php -l a échoué."; continue
             fi
             CHANGED=$(git status --porcelain | awk '{print $2}' | sort | tr '\n' ' ')
             if [ "$CHANGED" != "composer.json composer.lock " ]; then
@@ -225,6 +234,7 @@ jobs:
           fi
 
           git push --quiet origin "$BRANCH"
+          PUSHED=1
           $CLI pr-body "$DONE" "$ITEM_ID" "$AUTO_MERGE" > "$RUNNER_TEMP/pr-body.md"
           PR_URL=$(gh pr create --base "$PRODUCTION_BRANCH" --head "$BRANCH" --title "$($CLI pr-title "$DONE")" --body-file "$RUNNER_TEMP/pr-body.md")
 
@@ -251,16 +261,24 @@ jobs:
           fi
 
           if [ "$AUTO_STATE" = pending ]; then
-            [ "$($CLI smoke .github/workflows/build.yml)" = true ] || refuse "Smoke test inactif dans build.yml."
+            # No build.yml or an unreadable one leaves the JSON empty: the smoke test then counts as off.
+            yq -o=json '.jobs // {}' .github/workflows/build.yml > "$RUNNER_TEMP/build-jobs.json" 2>/dev/null || : > "$RUNNER_TEMP/build-jobs.json"
+            [ "$($CLI smoke "$RUNNER_TEMP/build-jobs.json")" = true ] || refuse "Smoke test inactif sur un déploiement de production de build.yml."
           fi
           if [ "$AUTO_STATE" = pending ]; then
             [ "$($CLI hours)" = true ] || refuse "Hors heures ouvrées (lun-ven, 8 h - 18 h, heure de Montréal)."
           fi
           if [ "$AUTO_STATE" = pending ]; then
-            if OUT=$(gh pr merge "$PR_URL" --merge 2>&1); then
-              AUTO_STATE=merged
-            else
-              echo "$OUT"; refuse "GitHub a refusé le merge : $(tail -n 1 <<<"$OUT")"
+            # A PR just created can still be computing its mergeability.
+            for attempt in 1 2 3; do
+              if OUT=$(gh pr merge "$PR_URL" --merge 2>&1); then
+                AUTO_STATE=merged
+                break
+              fi
+              [ "$attempt" -eq 3 ] || sleep 5
+            done
+            if [ "$AUTO_STATE" != merged ]; then
+              print_untrusted "$OUT"; refuse "GitHub a refusé le merge : $(tail -n 1 <<<"$OUT")"
             fi
           fi
 
@@ -278,6 +296,7 @@ jobs:
   cleanup:
     if: >-
       github.event_name == 'pull_request'
+      && github.event.action == 'closed'
       && startsWith(github.event.pull_request.head.ref, 'kryzawatch/update-')
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -301,13 +320,18 @@ jobs:
           set -euo pipefail
           # 422: already gone (deleted by hand or by the repository setting).
           if ! OUT=$(gh api -X DELETE "repos/$REPOSITORY/git/refs/heads/$BRANCH" 2>&1); then
-            grep -q "HTTP 422" <<<"$OUT" || { echo "$OUT"; exit 1; }
+            if ! grep -q "HTTP 422" <<<"$OUT"; then
+              STOP_TOKEN=$(openssl rand -hex 16)
+              echo "::stop-commands::$STOP_TOKEN"; echo "$OUT"; echo "::$STOP_TOKEN::"
+              exit 1
+            fi
           fi
           echo "Branche $BRANCH supprimée."
 
   merge-back:
     if: >-
       github.event_name == 'pull_request'
+      && github.event.action == 'closed'
       && github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.head.ref, 'kryzawatch/update-')
       && github.event.pull_request.base.ref == inputs.production_branch

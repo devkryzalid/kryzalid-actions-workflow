@@ -12,6 +12,10 @@ final class WordPressUpdate
 
     private const VERSION_PATTERN = '/^(\d[0-9A-Za-z.+-]{0,30})?$/D';
 
+    private const ANNOTATION_BUDGET = 3900;
+
+    private const JSON_FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR;
+
     public static function resolve(array $lock, string $type, string $slug): array
     {
         $composerType = self::COMPOSER_TYPES[$type] ?? null;
@@ -182,15 +186,95 @@ final class WordPressUpdate
             'packages' => array_values($packages),
             'auto_merge' => $autoMerge,
             'auto_merge_reason' => $autoMergeReason,
-        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        ], self::JSON_FLAGS);
     }
 
     public static function annotation(?string $resultJson): string
     {
-        $message = $resultJson ?? self::result('failed', "Le workflow s'est arrêté avant de produire un résultat : voir les logs.", '', [], 'not_requested', '');
+        $message = $resultJson !== null && trim($resultJson) !== ''
+            ? trim($resultJson)
+            : self::result('failed', "Le workflow s'est arrêté avant de produire un résultat : voir les logs.", '', [], 'not_requested', '');
+        $data = json_decode($message, true);
 
-        // Workflow command data must escape these three, or the annotation is cut or dropped.
-        return '::notice title=kryzawatch-update::'.strtr(trim($message), ['%' => '%25', "\r" => '%0D', "\n" => '%0A']);
+        if (is_array($data) && is_array($data['packages'] ?? null)) {
+            $message = self::fit($data);
+        }
+
+        return '::notice title=kryzawatch-update::'.self::escape($message);
+    }
+
+    // Workflow command data must escape these three, or the annotation is cut or dropped.
+    private static function escape(string $message): string
+    {
+        return strtr($message, ['%' => '%25', "\r" => '%0D', "\n" => '%0A']);
+    }
+
+    /** The runner cuts annotation messages at 4096 characters, which would leave Kryzawatch an undecodable JSON. */
+    private static function fit(array $data): string
+    {
+        $cap = fn (mixed $reason): string => mb_substr(is_string($reason) ? $reason : '', 0, 200);
+        $data['reason'] = $cap($data['reason'] ?? '');
+        $data['auto_merge_reason'] = $cap($data['auto_merge_reason'] ?? '');
+        $packages = [];
+
+        foreach (array_values($data['packages']) as $package) {
+            if (is_array($package)) {
+                unset($package['title'], $package['package']);
+                $package['reason'] = $cap($package['reason'] ?? '');
+                $packages[] = $package;
+            }
+        }
+
+        $total = count($packages);
+        $data['packages'] = $packages;
+        $fits = fn (array $data): bool => strlen(self::escape(json_encode($data, self::JSON_FLAGS))) <= self::ANNOTATION_BUDGET;
+
+        if ($fits($data)) {
+            return json_encode($data, self::JSON_FLAGS);
+        }
+
+        $defaults = ['reason' => '', 'major_jump' => false, 'from' => ''];
+        $data['packages'] = array_map(fn (array $package): array => array_filter(
+            $package,
+            fn (mixed $value, string|int $key): bool => ! array_key_exists($key, $defaults) || $value !== $defaults[$key],
+            ARRAY_FILTER_USE_BOTH,
+        ), $data['packages']);
+
+        if ($fits($data)) {
+            return json_encode($data, self::JSON_FLAGS);
+        }
+
+        $data['packages'] = array_values(array_filter($data['packages'], fn (array $package): bool => ($package['status'] ?? null) === 'updated'));
+        $data['omitted'] = $total - count($data['packages']);
+
+        if ($fits($data)) {
+            return json_encode($data, self::JSON_FLAGS);
+        }
+
+        $data['packages'] = array_map(function (array $package): array {
+            unset($package['from']);
+
+            return $package;
+        }, $data['packages']);
+
+        while ($data['packages'] !== [] && ! $fits($data)) {
+            array_pop($data['packages']);
+            $data['omitted']++;
+        }
+
+        if ($data['packages'] !== []) {
+            return json_encode($data, self::JSON_FLAGS);
+        }
+
+        return json_encode([
+            'status' => $data['status'] ?? 'failed',
+            'reason' => 'Résultat tronqué : voir la PR.',
+            'pr_url' => $data['pr_url'] ?? '',
+            'packages' => [],
+            'omitted' => $total,
+            'auto_merge' => $data['auto_merge'] ?? 'not_requested',
+            'auto_merge_reason' => $data['auto_merge_reason'],
+        ], self::JSON_FLAGS);
     }
 
     /** The list comes from a dispatch anyone with Actions write can send: every field is checked before use. */
@@ -228,9 +312,20 @@ final class WordPressUpdate
         return ['status' => 'ok', 'packages' => $packages];
     }
 
-    public static function smokeTestEnabled(string $buildYml): bool
+    /** @param array $jobs the `jobs` map of the caller's build.yml: every production deployment must run the smoke test. */
+    public static function smokeTestEnabled(array $jobs): bool
     {
-        return preg_match('/^\s*smoke_test:\s*true\s*$/m', $buildYml) === 1;
+        $production = array_filter($jobs, fn (mixed $job): bool => is_array($job) && ($job['with']['environment'] ?? null) === 'production');
+
+        foreach ($production as $job) {
+            $smoke = $job['with']['smoke_test'] ?? null;
+
+            if (($smoke !== true && $smoke !== 'true') || ! is_string($job['with']['site_url'] ?? null) || trim($job['with']['site_url']) === '') {
+                return false;
+            }
+        }
+
+        return $production !== [];
     }
 
     public static function withinBusinessHours(DateTimeImmutable $now): bool
