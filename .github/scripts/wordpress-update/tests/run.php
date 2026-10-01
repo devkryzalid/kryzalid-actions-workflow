@@ -236,4 +236,21 @@ check('prBodyMany announces the number of fixed advisories', str_contains($bodyA
 check('prBodyMany links an advisory', str_contains($bodyAdvisories, '[Avis](https://www.wordfence.com/a?x=1&y=2)'), true);
 check('prBodyMany links the wordpress.org changelog', str_contains($bodyMany, 'https://wordpress.org/plugins/redirection/#developers'), true);
 
+// untrusted input edge cases
+check('packages rejects a slug with a trailing newline',
+    WordPressUpdate::packages("[{\"type\":\"plugin\",\"slug\":\"a\\n\",\"title\":\"A\",\"patched_in\":\"\"}]")['status'],
+    'invalid');
+check('packages rejects a patched_in with a trailing newline',
+    WordPressUpdate::packages("[{\"type\":\"plugin\",\"slug\":\"a\",\"title\":\"A\",\"patched_in\":\"1.0\\n\"}]")['status'],
+    'invalid');
+check('packages rejects a non-string field',
+    WordPressUpdate::packages('[{"type":["x"],"slug":"a","title":"A","patched_in":""}]')['status'],
+    'invalid');
+check('packages accepts an absent patched_in',
+    WordPressUpdate::packages('[{"type":"plugin","slug":"a","title":"A"}]')['packages'][0]['patched_in'],
+    '');
+check('pickFix refuses a fix older than the installed version',
+    WordPressUpdate::pickFix(['3.4.5', '3.4.8', '3.4.9'], '3.4.8', '3.4.5'),
+    null);
+
 exit($failures > 0 ? 1 : 0);

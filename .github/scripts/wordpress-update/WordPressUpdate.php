@@ -8,9 +8,9 @@ final class WordPressUpdate
         'core' => 'wordpress-core',
     ];
 
-    private const SLUG_PATTERN = '/^[A-Za-z0-9._-]{1,100}$/';
+    private const SLUG_PATTERN = '/^[A-Za-z0-9._-]{1,100}$/D';
 
-    private const VERSION_PATTERN = '/^(\d[0-9A-Za-z.+-]{0,30})?$/';
+    private const VERSION_PATTERN = '/^(\d[0-9A-Za-z.+-]{0,30})?$/D';
 
     public static function resolve(array $lock, string $type, string $slug): array
     {
@@ -70,7 +70,9 @@ final class WordPressUpdate
 
         foreach (self::stable($versions) as $version) {
             if (version_compare($version, $patchedIn, '>=')) {
-                return self::minor($version) === self::minor(self::normalize($installed)) ? $version : null;
+                $keepsMinor = self::minor($version) === self::minor(self::normalize($installed));
+
+                return $keepsMinor && version_compare($version, self::normalize($installed), '>') ? $version : null;
             }
         }
 
@@ -82,7 +84,7 @@ final class WordPressUpdate
     {
         $stable = array_values(array_filter(
             array_map(self::normalize(...), $versions),
-            fn (string $version): bool => preg_match('/^\d+(\.\d+)*$/', $version) === 1,
+            fn (string $version): bool => preg_match('/^\d+(\.\d+)*$/D', $version) === 1,
         ));
         usort($stable, 'version_compare');
 
@@ -126,7 +128,7 @@ final class WordPressUpdate
         foreach (array_slice($items, 0, 50) as $item) {
             $patchedIn = is_array($item) ? (string) ($item['patched_in'] ?? '') : '';
 
-            if (preg_match('/^\d[0-9A-Za-z.+-]{0,30}$/', $patchedIn) !== 1 || version_compare($patchedIn, $target, '>')) {
+            if (preg_match('/^\d[0-9A-Za-z.+-]{0,30}$/D', $patchedIn) !== 1 || version_compare($patchedIn, $target, '>')) {
                 continue;
             }
 
@@ -137,10 +139,10 @@ final class WordPressUpdate
             $fixed[] = [
                 // Pipes would break the Markdown table of the pull request.
                 'title' => str_replace('|', '/', self::cleanTitle((string) ($item['title'] ?? ''))),
-                'cve' => preg_match('/^CVE-\d{4}-\d{1,7}$/', $cve) === 1 ? $cve : '',
+                'cve' => preg_match('/^CVE-\d{4}-\d{1,7}$/D', $cve) === 1 ? $cve : '',
                 'severity' => isset($rank[$severity]) ? $severity : '',
                 'patched_in' => $patchedIn,
-                'url' => preg_match('#^https://[A-Za-z0-9./?=_%:\#&-]{1,250}$#', $url) === 1 ? $url : '',
+                'url' => preg_match('#^https://[A-Za-z0-9./?=_%:\#&-]{1,250}$#D', $url) === 1 ? $url : '',
             ];
         }
 
@@ -203,10 +205,18 @@ final class WordPressUpdate
         $packages = [];
 
         foreach ($items as $index => $item) {
-            $type = is_array($item) ? (string) ($item['type'] ?? '') : '';
-            $slug = is_array($item) ? (string) ($item['slug'] ?? '') : '';
-            $title = is_array($item) ? self::cleanTitle((string) ($item['title'] ?? '')) : '';
-            $patchedIn = is_array($item) ? (string) ($item['patched_in'] ?? '') : '';
+            $fields = is_array($item) ? $item + ['patched_in' => ''] : [];
+
+            foreach (['type', 'slug', 'title', 'patched_in'] as $key) {
+                if (! is_string($fields[$key] ?? null)) {
+                    return ['status' => 'invalid', 'reason' => "Paquet n°{$index} invalide."];
+                }
+            }
+
+            $type = $fields['type'];
+            $slug = $fields['slug'];
+            $title = self::cleanTitle($fields['title']);
+            $patchedIn = $fields['patched_in'];
 
             if (! isset(self::COMPOSER_TYPES[$type]) || preg_match(self::SLUG_PATTERN, $slug) !== 1 || $title === '' || preg_match(self::VERSION_PATTERN, $patchedIn) !== 1) {
                 return ['status' => 'invalid', 'reason' => "Paquet n°{$index} invalide."];
