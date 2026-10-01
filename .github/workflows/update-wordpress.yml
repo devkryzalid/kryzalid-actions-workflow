@@ -117,8 +117,26 @@ jobs:
           AUTO_REASON=""
           [ "$AUTO_MERGE" = true ] && AUTO_STATE=pending
           finish() { $CLI result "$1" "$2" "$3" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"; exit 0; }
-          abort() { [ "$AUTO_STATE" = pending ] && AUTO_STATE=refused; $CLI result failed "$1" "" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"; exit 1; }
           refuse() { [ "$AUTO_STATE" = pending ] && { AUTO_STATE=refused; AUTO_REASON="$1"; }; return 0; }
+          abort() { refuse "$1"; $CLI result failed "$1" "" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"; exit 1; }
+          PR_URL=""
+          BRANCH=""
+          # Any unexpected failure still leaves a result; a pushed branch without a PR would block every later run.
+          # shellcheck disable=SC2329
+          on_exit() {
+            local code=$?
+            set +e
+            if [ "$code" -eq 0 ] || [ -s "$RESULT" ]; then return 0; fi
+            refuse "Le workflow a été interrompu."
+            if [ -n "$PR_URL" ]; then
+              $CLI result pr_opened "" "$PR_URL" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"
+            else
+              $CLI result failed "Interrompu avant l'ouverture de la PR." "" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"
+              if [ -n "$BRANCH" ]; then git push --quiet origin --delete "$BRANCH" 2>/dev/null; fi
+            fi
+            return 0
+          }
+          trap 'on_exit' EXIT
           record() {
             jq -c --arg type "$TYPE" --arg slug "$SLUG" --arg title "$TITLE" --arg package "${PACKAGE:-}" \
               --arg from "${FROM:-}" --arg to "${TO:-}" --arg status "$1" --arg reason "${2:-}" --argjson major "${MAJOR_JUMP:-false}" \
@@ -211,16 +229,25 @@ jobs:
           PR_URL=$(gh pr create --base "$PRODUCTION_BRANCH" --head "$BRANCH" --title "$($CLI pr-title "$DONE")" --body-file "$RUNNER_TEMP/pr-body.md")
 
           if [ -n "$STAGING_BRANCH" ]; then
-            git fetch --quiet origin "$STAGING_BRANCH"
-            git switch --quiet -c staging-merge "origin/$STAGING_BRANCH"
-            if git merge --no-ff -m "Merge branch '$BRANCH' into $STAGING_BRANCH" "$BRANCH"; then
-              git push --quiet origin "HEAD:$STAGING_BRANCH"
-              gh pr comment "$PR_URL" --body "Mergée dans \`$STAGING_BRANCH\` : déploiement en staging lancé. Vérifier le staging avant de merger."
+            if ! git fetch --quiet origin "$STAGING_BRANCH"; then
+              gh pr comment "$PR_URL" --body "Impossible de récupérer \`$STAGING_BRANCH\` : pas de déploiement en staging, à faire à la main." || true
+              refuse "Staging non mis à jour : relecture humaine."
             else
-              git merge --abort
-              gh pr comment "$PR_URL" --body "Conflit en mergeant dans \`$STAGING_BRANCH\` : pas de déploiement en staging, à faire à la main."
+              git switch --quiet -c staging-merge "origin/$STAGING_BRANCH"
+              if git merge --no-ff -m "Merge branch '$BRANCH' into $STAGING_BRANCH" "$BRANCH"; then
+                if git push --quiet origin "HEAD:$STAGING_BRANCH"; then
+                  gh pr comment "$PR_URL" --body "Mergée dans \`$STAGING_BRANCH\` : déploiement en staging lancé. Vérifier le staging avant de merger." || true
+                else
+                  gh pr comment "$PR_URL" --body "Le push vers \`$STAGING_BRANCH\` a échoué : pas de déploiement en staging, à faire à la main." || true
+                  refuse "Staging non mis à jour : relecture humaine."
+                fi
+              else
+                git merge --abort || true
+                gh pr comment "$PR_URL" --body "Conflit en mergeant dans \`$STAGING_BRANCH\` : pas de déploiement en staging, à faire à la main." || true
+                refuse "Conflit de merge dans le staging : relecture humaine."
+              fi
+              git switch --quiet "$BRANCH"
             fi
-            git switch --quiet "$BRANCH"
           fi
 
           if [ "$AUTO_STATE" = pending ]; then
@@ -319,7 +346,7 @@ jobs:
           if git merge --no-ff -m "Merge branch '$PRODUCTION_BRANCH' into $DEV_BRANCH" "origin/$PRODUCTION_BRANCH"; then
             git push --quiet origin "HEAD:$DEV_BRANCH"
           else
-            git merge --abort
+            git merge --abort || true
             gh pr create --base "$DEV_BRANCH" --head "$PRODUCTION_BRANCH" \
               --title "chore: merge $PRODUCTION_BRANCH into $DEV_BRANCH" \
               --body "Conflit après la mise à jour : \`$DEV_BRANCH\` doit être remise à jour à la main."
