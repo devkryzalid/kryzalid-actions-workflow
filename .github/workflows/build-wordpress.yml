@@ -114,7 +114,8 @@ jobs:
       - name: Connexion OpenVPN
         shell: bash
         env:
-          OPENVPN_CONFIG: ${{ inputs.environment == 'staging' && secrets.OPENVPN_CONFIG_STAGING || secrets.OPENVPN_CONFIG_PROD }}
+          # An empty staging secret must not fall back to the production profile
+          OPENVPN_CONFIG: ${{ inputs.environment == 'staging' && secrets.OPENVPN_CONFIG_STAGING || inputs.environment != 'staging' && secrets.OPENVPN_CONFIG_PROD || '' }}
         run: |
           if [ -z "$OPENVPN_CONFIG" ]; then
             echo "Pas de profil OpenVPN pour cet environnement, connexion directe."
