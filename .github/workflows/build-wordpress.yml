@@ -266,7 +266,51 @@ jobs:
 
           if [ "$USES_COMPOSER" = "true" ]; then
             echo "📦 composer install (via $PHP_BIN)"
-            (cd "$ROOT" && "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --no-interaction --prefer-dist --optimize-autoloader)
+            # Its exit code alone is not trusted: the check below decides
+            (cd "$ROOT" && "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --no-interaction --prefer-dist --optimize-autoloader) \
+              || echo "⚠️  composer install en erreur : contrôle des paquets sur le disque"
+
+            # Composer < 2.8 can delete a package it has just installed when its name changes for the
+            # same folder (wpackagist-plugin/x -> wp-plugin/x): every locked plugin and theme must exist.
+            # PHP 7.3 compatible: web3 runs it as its CLI.
+            missing_packages() {
+              "$PHP_BIN" -r '
+                $root = $argv[1];
+                $lock = json_decode((string) file_get_contents($root."/composer.lock"), true);
+                $json = json_decode((string) file_get_contents($root."/composer.json"), true);
+                $paths = isset($json["extra"]["installer-paths"]) ? $json["extra"]["installer-paths"] : array();
+                $missing = array();
+                foreach (isset($lock["packages"]) ? $lock["packages"] : array() as $p) {
+                    $name = isset($p["extra"]["installer-name"]) ? $p["extra"]["installer-name"] : substr($p["name"], strpos($p["name"], "/") + 1);
+                    foreach ($paths as $pattern => $selectors) {
+                        if (in_array("type:".$p["type"], $selectors, true) || in_array($p["name"], $selectors, true)) {
+                            $dir = str_replace(array("{\$name}", "{\$vendor}"), array($name, strtok($p["name"], "/")), $pattern);
+                            if (! is_dir($root."/".rtrim($dir, "/"))) {
+                                $missing[] = $p["name"];
+                            }
+                            break;
+                        }
+                    }
+                }
+                echo implode(" ", $missing);
+              ' "$ROOT"
+            }
+            MISSING="$(missing_packages)"
+            if [ -n "$MISSING" ]; then
+              echo "⚠️  Paquets absents du disque : $MISSING. Nouvelle installation."
+              (cd "$ROOT" && "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --no-interaction --prefer-dist --optimize-autoloader) || true
+              MISSING="$(missing_packages)"
+            fi
+            if [ -n "$MISSING" ]; then
+              # Recorded as installed but deleted afterwards: only reinstall puts them back
+              (cd "$ROOT" && "$PHP_BIN" "$COMPOSER_BIN" reinstall --no-interaction --prefer-dist $MISSING) || true
+              MISSING="$(missing_packages)"
+            fi
+            if [ -n "$MISSING" ]; then
+              echo "❌ Paquets toujours absents du disque : $MISSING"
+              exit 1
+            fi
+            echo "✅ Paquets Composer présents sur le disque"
 
             # La racine web sert desormais composer.json, composer.lock et vendor/ : le serveur
             # doit les refuser (zz-composer-deny.conf). Un 200 ici = serveur oublie, on arrete.
