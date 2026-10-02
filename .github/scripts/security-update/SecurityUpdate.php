@@ -216,8 +216,8 @@ final class SecurityUpdate
     private static function changelogUrl(string $package, string $slug): ?string
     {
         return match (true) {
-            str_starts_with($package, 'wpackagist-plugin/') => "https://wordpress.org/plugins/{$slug}/#developers",
-            str_starts_with($package, 'wpackagist-theme/') => "https://wordpress.org/themes/{$slug}/",
+            str_starts_with($package, 'wp-plugin/'), str_starts_with($package, 'wpackagist-plugin/') => "https://wordpress.org/plugins/{$slug}/#developers",
+            str_starts_with($package, 'wp-theme/'), str_starts_with($package, 'wpackagist-theme/') => "https://wordpress.org/themes/{$slug}/",
             $package === 'roots/wordpress-no-content' => 'https://wordpress.org/news/category/releases/',
             default => null,
         };
