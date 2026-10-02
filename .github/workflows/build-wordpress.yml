@@ -50,6 +50,11 @@ on:
         required: false
       SSH_PORT_PROD:
         required: false
+      # Servers that only accept the office IP: an OpenVPN profile tunnels the runner through it
+      OPENVPN_CONFIG_STAGING:
+        required: false
+      OPENVPN_CONFIG_PROD:
+        required: false
       # Secrets communs
       SLACK_WEBHOOK_URL:
         required: true
@@ -100,6 +105,33 @@ jobs:
           else
             echo "build_command=build" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Connexion OpenVPN
+        shell: bash
+        env:
+          OPENVPN_CONFIG: ${{ inputs.environment == 'staging' && secrets.OPENVPN_CONFIG_STAGING || secrets.OPENVPN_CONFIG_PROD }}
+        run: |
+          if [ -z "$OPENVPN_CONFIG" ]; then
+            echo "Pas de profil OpenVPN pour cet environnement, connexion directe."
+            exit 0
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq openvpn
+          umask 077
+          printf '%s\n' "$OPENVPN_CONFIG" > "$RUNNER_TEMP/vpn.ovpn"
+          # Older servers still push comp-lzo and AES-128-CBC, both refused by default since OpenVPN 2.6
+          printf '%s\n' 'allow-compression asym' 'data-ciphers AES-256-GCM:AES-128-GCM:AES-128-CBC' 'data-ciphers-fallback AES-128-CBC' >> "$RUNNER_TEMP/vpn.ovpn"
+          sudo openvpn --config "$RUNNER_TEMP/vpn.ovpn" --daemon --log /tmp/openvpn.log --writepid /tmp/openvpn.pid
+          rm "$RUNNER_TEMP/vpn.ovpn"
+          for _ in $(seq 30); do
+            sudo grep -q 'Initialization Sequence Completed' /tmp/openvpn.log && break
+            sleep 2
+          done
+          if ! sudo grep -q 'Initialization Sequence Completed' /tmp/openvpn.log; then
+            sudo grep -E 'ERROR|error|failed' /tmp/openvpn.log | tail -10
+            echo "❌ Tunnel OpenVPN non établi."
+            exit 1
+          fi
+          echo "✅ Tunnel OpenVPN établi, IP de sortie : $(curl -s --max-time 10 https://api.ipify.org || echo inconnue)"
 
       - name: Configuration de la clé SSH
         uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
@@ -378,6 +410,14 @@ jobs:
           if [ -n "$FAILED" ]; then
             echo "Site cassé après déploiement :$FAILED. Retour arrière : git revert du dernier commit sur ${GITHUB_REF_NAME:-la branche de prod}."
             exit 1
+          fi
+
+      - name: Déconnexion OpenVPN
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/openvpn.pid ]; then
+            sudo kill "$(cat /tmp/openvpn.pid)"
           fi
 
   notify:
