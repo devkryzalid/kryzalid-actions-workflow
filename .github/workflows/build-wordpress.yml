@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: ""
+      node_build:
+        description: "Compile le front (npm) quand un package.json est trouve. false pour un theme dont le dist est versionne et compile sur un poste de dev"
+        required: false
+        type: boolean
+        default: true
       smoke_test:
         description: "En production, verifie apres le deploiement que chaque chemin de smoke_test_paths repond 200 sans erreur fatale. Exige site_url"
         required: false
@@ -161,13 +166,14 @@ jobs:
           # Hebergements mutualises (cPanel) exposent souvent SSH ailleurs que sur le 22
           ssh -p "${SSH_PORT:-22}" -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
             "$SSH_USER@$SERVER_HOST" \
-            bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" "${{ inputs.php_bin }}" "${{ inputs.site_url }}" <<'BASH'
+            bash -s -- "$PROJECT_PATH" "$BRANCH" "$MODE" "${{ inputs.php_bin }}" "${{ inputs.node_build }}" "${{ inputs.site_url }}" <<'BASH'
           set -euo pipefail
           ROOT="$1"     # racine du repo git
           BRANCH="$2"
           MODE="$3"
           PHP_BIN="$4"
-          SITE_URL="${5:-}"   # ssh re-parses the command line: an empty argument does not survive it
+          NODE_BUILD="$5"
+          SITE_URL="${6:-}"   # ssh re-parses the command line: an empty argument does not survive it
 
           # --- Git au ROOT du repo ---
           cd "$ROOT"
@@ -361,7 +367,9 @@ jobs:
 
           # Un site WordPress editorial (contenu en blocs, CSS via plugin) n'a pas de front
           # a compiler : absence de package.json = rien a builder, pas une erreur.
-          if WORKDIR="$(choose_workdir "$ROOT")"; then
+          if [ "$NODE_BUILD" != "true" ]; then
+            echo "ℹ️  node_build: false, front versionne compile hors serveur : aucun build."
+          elif WORKDIR="$(choose_workdir "$ROOT")"; then
             echo "📁 Dossier Node sélectionné: $WORKDIR"
 
             # --- Activer Node/npm (nvm si dispo, sinon global) ---
