@@ -293,6 +293,7 @@ $bodyAdvisories = WordPressUpdate::prBodyMany([$many[1]], $fixed, '42', false);
 check('prBodyMany announces the number of fixed advisories', str_contains($bodyAdvisories, '### Failles corrigées (3)'), true);
 check('prBodyMany links an advisory', str_contains($bodyAdvisories, '[Avis](https://www.wordfence.com/a?x=1&y=2)'), true);
 check('prBodyMany links the wordpress.org changelog', str_contains($bodyMany, 'https://wordpress.org/plugins/redirection/#developers'), true);
+check('prBodyMany links the wordpress.org changelog of a WP Packages plugin', str_contains(WordPressUpdate::prBodyMany([['package' => 'wp-plugin/redirection'] + $many[1], $many[0]], [], '42', false), 'https://wordpress.org/plugins/redirection/#developers'), true);
 
 // untrusted input edge cases
 check('packages rejects a slug with a trailing newline',

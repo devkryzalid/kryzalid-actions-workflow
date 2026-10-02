@@ -230,7 +230,7 @@ jobs:
               $missing = [];
               foreach ($project["repositories"] ?? [] as $repo) {
                   $host = (string) parse_url($repo["url"] ?? "", PHP_URL_HOST);
-                  if ($host === "" || $host === "wpackagist.org") {
+                  if ($host === "" || in_array($host, ["wpackagist.org", "repo.wp-packages.org"], true)) {
                       continue;
                   }
                   $key = $host === "github.com" ? "github-oauth" : "http-basic";
