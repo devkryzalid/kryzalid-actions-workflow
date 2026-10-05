@@ -200,13 +200,8 @@ final class WordPressUpdate
             $message = self::fit($data);
         }
 
-        return '::notice title=kryzawatch-update::'.self::escape($message);
-    }
-
-    // Workflow command data must escape these three, or the annotation is cut or dropped.
-    private static function escape(string $message): string
-    {
-        return strtr($message, ['%' => '%25', "\r" => '%0D', "\n" => '%0A']);
+        // GitHub masks each line of a multi-line secret, so a pretty-printed COMPOSER_AUTH turns every { and } of raw JSON into ***.
+        return '::notice title=kryzawatch-update::'.base64_encode($message);
     }
 
     /** The runner cuts annotation messages at 4096 characters, which would leave Kryzawatch an undecodable JSON. */
@@ -227,7 +222,7 @@ final class WordPressUpdate
 
         $total = count($packages);
         $data['packages'] = $packages;
-        $fits = fn (array $data): bool => strlen(self::escape(json_encode($data, self::JSON_FLAGS))) <= self::ANNOTATION_BUDGET;
+        $fits = fn (array $data): bool => strlen(base64_encode(json_encode($data, self::JSON_FLAGS))) <= self::ANNOTATION_BUDGET;
 
         if ($fits($data)) {
             return json_encode($data, self::JSON_FLAGS);
@@ -269,7 +264,7 @@ final class WordPressUpdate
         return json_encode([
             'status' => $data['status'] ?? 'failed',
             'reason' => 'Résultat tronqué : voir la PR.',
-            'pr_url' => $data['pr_url'] ?? '',
+            'pr_url' => mb_substr((string) ($data['pr_url'] ?? ''), 0, 200),
             'packages' => [],
             'omitted' => $total,
             'auto_merge' => $data['auto_merge'] ?? 'not_requested',
