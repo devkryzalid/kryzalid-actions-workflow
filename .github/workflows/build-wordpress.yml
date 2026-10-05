@@ -292,7 +292,8 @@ jobs:
                     foreach ($paths as $pattern => $selectors) {
                         if (in_array("type:".$p["type"], $selectors, true) || in_array($p["name"], $selectors, true)) {
                             $dir = str_replace(array("{\$name}", "{\$vendor}"), array($name, strtok($p["name"], "/")), $pattern);
-                            if (! is_dir($root."/".rtrim($dir, "/"))) {
+                            // A deploy reset can empty a folder Composer still records as installed: no PHP file at its root means missing
+                            if (! glob($root."/".rtrim($dir, "/")."/*.php")) {
                                 $missing[] = $p["name"];
                             }
                             break;
