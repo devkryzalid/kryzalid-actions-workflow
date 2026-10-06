@@ -23,7 +23,7 @@ on:
         type: string
         default: 'php'
       cache_routes:
-        description: 'Run artisan route:cache after deploy. Set to false if routes are registered dynamically per-request based on the incoming request (e.g. mcamara/laravel-localization calling LaravelLocalization::setLocale() with no argument at boot) — route caching freezes registration to whatever a CLI/console context resolves to, which is not equivalent to real per-request HTTP behavior for these projects.'
+        description: 'Cache routes after deploy. Uses artisan route:trans:cache when the project exposes it (mcamara/laravel-localization, to be paired with the LoadsTranslatedCachedRoutes trait — one cache file per locale), artisan route:cache otherwise. Set to false if routes are registered dynamically per-request and cannot be cached.'
         required: false
         type: boolean
         default: true
@@ -229,7 +229,12 @@ jobs:
           fi
 
           if [ "$CACHE_ROUTES" = "true" ]; then
-            "$PHP_BIN" artisan route:cache
+            # mcamara/laravel-localization : plain route:cache drops the locale prefixes (404 on /fr/...)
+            if "$PHP_BIN" artisan list --raw | grep '^route:trans:cache' > /dev/null; then
+              "$PHP_BIN" artisan route:trans:cache
+            else
+              "$PHP_BIN" artisan route:cache
+            fi
           else
             echo "⏭️  cache_routes=false, route:cache ignoré (routes enregistrées dynamiquement par requête pour ce projet)."
           fi
