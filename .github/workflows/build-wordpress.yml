@@ -321,6 +321,16 @@ jobs:
             fi
             echo "✅ Paquets Composer présents sur le disque"
 
+            # PHP resolve un require 'vendor/autoload.php' relatif depuis le dossier courant (la racine sur le front)
+            # avant le dossier du plugin : CF7 6.2 chargeait ainsi l'autoload racine et le front tombait.
+            VENDOR_DIR="$("$PHP_BIN" -r '$j = json_decode((string) file_get_contents($argv[1]), true); echo isset($j["config"]["vendor-dir"]) ? rtrim($j["config"]["vendor-dir"], "/") : "vendor";' "$ROOT/composer.json")"
+            if [ "$VENDOR_DIR" != "vendor" ]; then
+              # Reste de l'ancien emplacement, que le reset ne supprime pas (dossier ignore)
+              rm -f "$ROOT/vendor/autoload.php"
+            elif [ -f "$ROOT/vendor/autoload.php" ]; then
+              echo "⚠️  vendor/autoload.php a la racine : tout plugin qui le require en relatif le chargera. Passer \"vendor-dir\": \"vendor/root\" dans composer.json (voir kryzaplate)."
+            fi
+
             # La racine web sert desormais composer.json, composer.lock et vendor/ : le serveur
             # doit les refuser (zz-composer-deny.conf). Un 200 ici = serveur oublie, on arrete.
             if [ -z "$SITE_URL" ]; then
