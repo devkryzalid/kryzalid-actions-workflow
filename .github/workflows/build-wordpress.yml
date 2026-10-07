@@ -72,8 +72,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-secrets:
+  # A single job: GitHub bills each job rounded up to the minute
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Vérification des secrets requis
         shell: bash
@@ -96,11 +98,6 @@ jobs:
             fi
           fi
 
-  build:
-    needs: validate-secrets
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
       - name: Définition du mode de build
         id: env
         shell: bash
@@ -485,20 +482,16 @@ jobs:
             sudo kill "$(cat /tmp/openvpn.pid)"
           fi
 
-  notify:
-    needs: build
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
       - name: Préparer les variables du message
         id: meta
+        if: always()
         shell: bash
         env:
           COMMIT_MSG_RAW: ${{ github.event.head_commit.message }}
           STACK_NAME: WordPress
           STACK_LOGO: https://s.w.org/about/images/logos/wordpress-logo-32.png
         run: |
-          IS_FAILURE="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+          IS_FAILURE="${{ job.status != 'success' }}"
           [ "${{ inputs.environment }}" = "production" ] && IS_PROD="true" || IS_PROD="false"
 
           if [ "$IS_FAILURE" = "true" ]; then
@@ -524,6 +517,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Notification Slack
+        if: always()
         uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}

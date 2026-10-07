@@ -201,12 +201,15 @@ jobs:
           fi
 
   # A leftover security/<slug>-<version> branch reads as "PR in progress" and would skip every later fix.
-  cleanup:
+  closed:
     if: >-
       github.event_name == 'pull_request'
       && startsWith(github.event.pull_request.head.ref, 'security/')
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    env:
+      PRODUCTION_BRANCH: ${{ inputs.production_branch }}
+      DEV_BRANCH: ${{ inputs.dev_branch }}
     steps:
       - name: GitHub App token
         id: app-token
@@ -231,27 +234,14 @@ jobs:
           fi
           echo "Branche $BRANCH supprimée."
 
-  merge-back:
-    if: >-
-      github.event_name == 'pull_request'
-      && github.event.pull_request.merged == true
-      && startsWith(github.event.pull_request.head.ref, 'security/')
-      && github.event.pull_request.base.ref == inputs.production_branch
-    runs-on: ubuntu-latest
-    env:
-      PRODUCTION_BRANCH: ${{ inputs.production_branch }}
-      DEV_BRANCH: ${{ inputs.dev_branch }}
-    steps:
-      - name: GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.SECURITY_BOT_CLIENT_ID }}
-          private-key: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-
       - name: Checkout dev
+        id: checkout-dev
+        # A failed branch deletion must not block the merge-back
+        if: >-
+          !cancelled()
+          && steps.app-token.outcome == 'success'
+          && github.event.pull_request.merged == true
+          && github.event.pull_request.base.ref == inputs.production_branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.dev_branch }}
@@ -259,6 +249,7 @@ jobs:
           fetch-depth: 0
 
       - name: Merge production into dev
+        if: ${{ !cancelled() && steps.checkout-dev.outcome == 'success' }}
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
