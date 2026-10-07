@@ -48,38 +48,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-secrets:
+  # A single job: GitHub bills each job rounded up to the minute
+  build:
     runs-on: ubuntu-latest
-    steps:
-      - name: Vérification des secrets requis
-        shell: bash
-        run: |
-          if [ "${{ inputs.environment }}" = "staging" ]; then
-            if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
-               [ -z "${{ secrets.SSH_USER_STAGING }}" ] || \
-               [ -z "${{ secrets.SERVER_HOST_STAGING }}" ] || \
-               [ -z "${{ secrets.PROJECT_PATH_STAGING }}" ]; then
-              echo "Secrets de staging manquants"
-              exit 1
-            fi
-          else
-            if [ -z "${{ secrets.SSH_PRIVATE_KEY_PROD }}" ] || \
-               [ -z "${{ secrets.SSH_USER_PROD }}" ] || \
-               [ -z "${{ secrets.SERVER_HOST_PROD }}" ] || \
-               [ -z "${{ secrets.PROJECT_PATH_PROD }}" ]; then
-              echo "Secrets de production manquants"
-              exit 1
-            fi
-          fi
-
-  check-files:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout du code
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Vérification des fichiers
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
         id: check_files
         shell: bash
         run: |
@@ -89,7 +70,8 @@ jobs:
           echo "missing_files=$missing_files" >> "$GITHUB_OUTPUT"
 
       - name: Notification Slack pour fichiers manquants
-        if: steps.check_files.outputs.missing_files != ''
+        if: github.ref == 'refs/heads/main' && steps.check_files.outputs.missing_files != ''
+        continue-on-error: true
         uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -134,11 +116,27 @@ jobs:
               }]
             }
 
-  build:
-    needs: validate-secrets
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
+      - name: Vérification des secrets requis
+        shell: bash
+        run: |
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_STAGING }}" ] || \
+               [ -z "${{ secrets.SSH_USER_STAGING }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_STAGING }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_STAGING }}" ]; then
+              echo "Secrets de staging manquants"
+              exit 1
+            fi
+          else
+            if [ -z "${{ secrets.SSH_PRIVATE_KEY_PROD }}" ] || \
+               [ -z "${{ secrets.SSH_USER_PROD }}" ] || \
+               [ -z "${{ secrets.SERVER_HOST_PROD }}" ] || \
+               [ -z "${{ secrets.PROJECT_PATH_PROD }}" ]; then
+              echo "Secrets de production manquants"
+              exit 1
+            fi
+          fi
+
       - name: Configuration de la clé SSH
         uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
@@ -221,24 +219,6 @@ jobs:
           echo "✅ Build terminé avec succès"
           BASH
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Configuration de la clé SSH
-        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
-        with:
-          ssh-private-key: ${{ inputs.environment == 'staging' && secrets.SSH_PRIVATE_KEY_STAGING || secrets.SSH_PRIVATE_KEY_PROD }}
-
-      - name: Configuration des hôtes SSH connus
-        shell: bash
-        env:
-          SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
-
       - name: Déploiement atomique (releases + symlink)
         shell: bash
         env:
@@ -267,7 +247,7 @@ jobs:
           RELEASE_PATH="releases/$RELEASE_NAME"
 
           # Note : la préservation des sitemaps depuis la release courante est
-          # déjà faite par le job `build` (cf. boucle sur sitemap*.xml/xsl).
+          # déjà faite par le step de build (cf. boucle sur sitemap*.xml/xsl).
 
           # --- Promotion de dist/ en nouvelle release ---
           mv dist "$RELEASE_PATH"
@@ -297,12 +277,8 @@ jobs:
           fi
           BASH
 
-  notify:
-    needs: [build, deploy]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
       - name: Préparer les variables du message
+        if: always()
         id: meta
         shell: bash
         env:
@@ -310,7 +286,7 @@ jobs:
           STACK_NAME: Angular
           STACK_LOGO: https://angular.io/assets/images/logos/angular/angular.png
         run: |
-          IS_FAILURE="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+          IS_FAILURE="${{ job.status != 'success' }}"
           [ "${{ inputs.environment }}" = "production" ] && IS_PROD="true" || IS_PROD="false"
 
           if [ "$IS_FAILURE" = "true" ]; then
@@ -336,6 +312,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Notification Slack
+        if: always()
         uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}

@@ -83,8 +83,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-secrets:
+  # A single job: GitHub bills each job rounded up to the minute
+  deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check required secrets
         shell: bash
@@ -107,11 +109,6 @@ jobs:
             fi
           fi
 
-  deploy:
-    needs: validate-secrets
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
       - name: Set up SSH key
         uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
@@ -249,12 +246,8 @@ jobs:
           echo "✅ Déploiement terminé."
           BASH
 
-  notify:
-    needs: deploy
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
       - name: Prepare notification metadata
+        if: always()
         id: meta
         shell: bash
         env:
@@ -262,7 +255,7 @@ jobs:
           STACK_NAME: Laravel
           STACK_LOGO: https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg
         run: |
-          IS_FAILURE="${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+          IS_FAILURE="${{ job.status != 'success' }}"
           [ "${{ inputs.environment }}" = "production" ] && IS_PROD="true" || IS_PROD="false"
 
           if [ "$IS_FAILURE" = "true" ]; then
@@ -293,6 +286,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Send Slack notification
+        if: always()
         uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
