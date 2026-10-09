@@ -234,6 +234,8 @@ jobs:
             git commit --quiet -F "$RUNNER_TEMP/commit-message.txt" -- composer.json composer.lock
             record updated ""
             if [ "$MAJOR_JUMP" = true ]; then refuse "Mise à jour majeure : relecture humaine."; fi
+            # The collector publishes premium releases without review: a manual batch is where a dev reads them.
+            if [ "$AUTO_MERGE" = routine ] && [[ "$PACKAGE" == kryzalid-premium/* ]]; then refuse "Plugin premium : relecture humaine."; fi
           done
 
           if [ "$(git rev-list --count "origin/${PRODUCTION_BRANCH}..HEAD")" -eq 0 ]; then
