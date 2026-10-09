@@ -200,8 +200,8 @@ final class WordPressUpdate
             $message = self::fit($data);
         }
 
-        // GitHub masks each line of a multi-line secret, so a pretty-printed COMPOSER_AUTH turns every { and } of raw JSON into ***.
-        return '::notice title=kryzawatch-update::'.base64_encode($message);
+        // The runner masks each line of a multi-line secret, raw and in base64: a pretty-printed COMPOSER_AUTH hid the braces of raw JSON, then a trailing fQ==.
+        return '::notice title=kryzawatch-update::'.bin2hex($message);
     }
 
     /** The runner cuts annotation messages at 4096 characters, which would leave Kryzawatch an undecodable JSON. */
@@ -222,7 +222,7 @@ final class WordPressUpdate
 
         $total = count($packages);
         $data['packages'] = $packages;
-        $fits = fn (array $data): bool => strlen(base64_encode(json_encode($data, self::JSON_FLAGS))) <= self::ANNOTATION_BUDGET;
+        $fits = fn (array $data): bool => strlen(bin2hex(json_encode($data, self::JSON_FLAGS))) <= self::ANNOTATION_BUDGET;
 
         if ($fits($data)) {
             return json_encode($data, self::JSON_FLAGS);

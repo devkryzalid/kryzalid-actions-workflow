@@ -121,26 +121,30 @@ $pkgs = [['type' => 'plugin', 'slug' => 'wp-members', 'from' => '3.4.8', 'to' =>
 check('result is single-line JSON with the package list',
     WordPressUpdate::result('pr_opened', '', 'https://github.com/devkryzalid/q2-guiderc/pull/7', $pkgs, 'not_requested', ''),
     '{"status":"pr_opened","reason":"","pr_url":"https://github.com/devkryzalid/q2-guiderc/pull/7","packages":[{"type":"plugin","slug":"wp-members","from":"3.4.8","to":"3.5.12","status":"updated","reason":"","major_jump":false}],"auto_merge":"not_requested","auto_merge_reason":""}');
-check('annotation is the result in base64, which holds no brace a masked secret line could hide',
+check('annotation is the result in hex, which neither the raw nor the base64 form of a masked secret line can match',
     WordPressUpdate::annotation(WordPressUpdate::result('failed', "100% raté\nligne 2", '', [], 'not_requested', '')),
-    '::notice title=kryzawatch-update::'.base64_encode('{"status":"failed","reason":"100% raté\nligne 2","pr_url":"","packages":[],"auto_merge":"not_requested","auto_merge_reason":""}'));
+    '::notice title=kryzawatch-update::'.bin2hex('{"status":"failed","reason":"100% raté\nligne 2","pr_url":"","packages":[],"auto_merge":"not_requested","auto_merge_reason":""}'));
+$trailingBrace = WordPressUpdate::result('pr_opened', '', 'https://github.com/devkryzalid/csl/pull/65', [['type' => 'plugin', 'slug' => 'cookiebot', 'from' => '4.7.3', 'to' => '4.7.5', 'status' => 'updated', 'reason' => '', 'major_jump' => false]], 'not_requested', '');
+check('a result whose base64 ends in fQ== (masked for a secret line holding only }) survives in hex',
+    [str_ends_with(base64_encode($trailingBrace), 'fQ=='), str_contains(WordPressUpdate::annotation($trailingBrace), 'fQ=='), str_ends_with(WordPressUpdate::annotation($trailingBrace), '7d')],
+    [true, false, true]);
 check('annotation keeps a hand-written result on one line',
     WordPressUpdate::annotation("{\"a\":1}\n{\"b\":2}"),
-    '::notice title=kryzawatch-update::'.base64_encode("{\"a\":1}\n{\"b\":2}"));
+    '::notice title=kryzawatch-update::'.bin2hex("{\"a\":1}\n{\"b\":2}"));
 check('annotation falls back to failed when no result was written',
     WordPressUpdate::annotation(null),
-    '::notice title=kryzawatch-update::'.base64_encode('{"status":"failed","reason":"Le workflow s\'est arrêté avant de produire un résultat : voir les logs.","pr_url":"","packages":[],"auto_merge":"not_requested","auto_merge_reason":""}'));
+    '::notice title=kryzawatch-update::'.bin2hex('{"status":"failed","reason":"Le workflow s\'est arrêté avant de produire un résultat : voir les logs.","pr_url":"","packages":[],"auto_merge":"not_requested","auto_merge_reason":""}'));
 
 check('annotation treats an empty result like a missing one',
     WordPressUpdate::annotation(" \n"), WordPressUpdate::annotation(null));
 check('annotation substitutes invalid UTF-8 instead of throwing',
-    str_contains(base64_decode(substr(WordPressUpdate::annotation(WordPressUpdate::result('failed', "bad \xC3", '', [], 'not_requested', '')), strlen('::notice title=kryzawatch-update::'))), "\"reason\":\"bad \u{FFFD}\""), true);
+    str_contains(hex2bin(substr(WordPressUpdate::annotation(WordPressUpdate::result('failed', "bad \xC3", '', [], 'not_requested', '')), strlen('::notice title=kryzawatch-update::'))), "\"reason\":\"bad \u{FFFD}\""), true);
 check('annotation drops title and package from the packages',
     WordPressUpdate::annotation(WordPressUpdate::result('pr_opened', '', 'https://github.com/o/r/pull/1', [['type' => 'plugin', 'slug' => 'a', 'title' => 'A', 'package' => 'wpackagist-plugin/a', 'from' => '1.0', 'to' => '1.1', 'status' => 'updated', 'reason' => '', 'major_jump' => false]], 'not_requested', '')),
-    '::notice title=kryzawatch-update::'.base64_encode('{"status":"pr_opened","reason":"","pr_url":"https://github.com/o/r/pull/1","packages":[{"type":"plugin","slug":"a","from":"1.0","to":"1.1","status":"updated","reason":"","major_jump":false}],"auto_merge":"not_requested","auto_merge_reason":""}'));
+    '::notice title=kryzawatch-update::'.bin2hex('{"status":"pr_opened","reason":"","pr_url":"https://github.com/o/r/pull/1","packages":[{"type":"plugin","slug":"a","from":"1.0","to":"1.1","status":"updated","reason":"","major_jump":false}],"auto_merge":"not_requested","auto_merge_reason":""}'));
 
 // The runner cuts annotation messages at 4096 characters.
-$decodeAnnotation = fn (string $line): ?array => json_decode((string) base64_decode(substr($line, strlen('::notice title=kryzawatch-update::')), true), true);
+$decodeAnnotation = fn (string $line): ?array => json_decode((string) hex2bin(substr($line, strlen('::notice title=kryzawatch-update::'))), true);
 $bulk = [];
 for ($i = 0; $i < 47; $i++) {
     $bulk[] = ['type' => 'plugin', 'slug' => str_pad("plugin-{$i}-", 25, 'x'), 'title' => str_repeat('T', 120), 'package' => 'wpackagist-plugin/'.str_pad("plugin-{$i}-", 25, 'x'), 'from' => '10.12.3', 'to' => '10.12.4', 'status' => 'updated', 'reason' => '', 'major_jump' => $i === 0];
@@ -157,7 +161,7 @@ check('annotation keeps the leading updated packages in order with slug and to',
     array_map(fn (array $package): array => [$package['slug'], $package['to']], $keptUpdated),
     array_map(fn (array $package): array => [$package['slug'], $package['to']], array_slice($bulk, 0, count($keptUpdated))));
 check('annotation counts every dropped package in omitted', count($decoded['packages'] ?? []) + ($decoded['omitted'] ?? 0), 50);
-check('annotation keeps most updated packages (26 here)', count($keptUpdated), 26);
+check('annotation keeps most updated packages (15 here)', count($keptUpdated), 15);
 check('annotation keeps the top-level fields', [$decoded['status'], $decoded['pr_url'], $decoded['auto_merge'], mb_strlen($decoded['reason']), mb_strlen($decoded['auto_merge_reason'])],
     ['pr_opened', 'https://github.com/devkryzalid/q2-guiderc/pull/1234', 'refused', 200, 200]);
 check('annotation caps package reasons at 200 characters',
