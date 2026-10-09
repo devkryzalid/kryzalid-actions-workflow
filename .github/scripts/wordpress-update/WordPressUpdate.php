@@ -345,7 +345,7 @@ final class WordPressUpdate
         return ($major ? '[major] ' : '').'chore(deps): WordPress updates ('.count($updated).' packages)';
     }
 
-    public static function prBodyMany(array $packages, array $advisories, string $itemId, bool $autoMergeRequested): string
+    public static function prBodyMany(array $packages, array $advisories, string $itemId, string $autoMerge): string
     {
         $status = fn (array $package): string => match ($package['status']) {
             'updated' => $package['major_jump'] ? 'mis à jour **[major]**' : 'mis à jour',
@@ -386,8 +386,14 @@ final class WordPressUpdate
 
         $lines[] = '';
 
-        if ($autoMergeRequested) {
-            $lines[] = '> Merge automatique demandé (faille critique) : le résultat est indiqué dans Kryzawatch.';
+        $mode = match ($autoMerge) {
+            'true' => 'faille critique',
+            'routine' => 'mise à jour courante',
+            default => null,
+        };
+
+        if ($mode !== null) {
+            $lines[] = "> Merge automatique demandé ({$mode}) : le résultat est indiqué dans Kryzawatch.";
             $lines[] = '';
         }
 

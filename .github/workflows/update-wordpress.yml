@@ -63,7 +63,7 @@ jobs:
           set -euo pipefail
           fail() { echo "::error::Input invalide : $1"; exit 1; }
           [[ "$ITEM_ID" =~ ^[0-9]+$ ]] || fail item_id
-          [[ "$AUTO_MERGE" =~ ^(true)?$ ]] || fail auto_merge
+          [[ "$AUTO_MERGE" =~ ^(true|routine)?$ ]] || fail auto_merge
           # Parsed and filtered by the PHP script; only the size is bounded here.
           [ "${#PACKAGES}" -le 20000 ] || fail packages
           [ "${#ADVISORIES}" -le 20000 ] || fail advisories
@@ -121,9 +121,12 @@ jobs:
           print_untrusted() { echo "::stop-commands::$STOP_TOKEN"; echo "$1"; echo "::$STOP_TOKEN::"; }
           AUTO_STATE=not_requested
           AUTO_REASON=""
-          [ "$AUTO_MERGE" = true ] && AUTO_STATE=pending
+          # true: critical fix launched by Kryzawatch; routine: non-major updates of a manual batch.
+          [ -n "$AUTO_MERGE" ] && AUTO_STATE=pending
           finish() { $CLI result "$1" "$2" "$3" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"; exit 0; }
           refuse() { [ "$AUTO_STATE" = pending ] && { AUTO_STATE=refused; AUTO_REASON="$1"; }; return 0; }
+          # A skipped package only blocks a critical fix: in routine mode it simply stays out of the PR.
+          refuse_fix() { [ "$AUTO_MERGE" = true ] && refuse "$1"; return 0; }
           abort() { refuse "$1"; $CLI result failed "$1" "" "$DONE" "$AUTO_STATE" "$AUTO_REASON" > "$RESULT"; exit 1; }
           PR_URL=""
           BRANCH=""
@@ -157,7 +160,7 @@ jobs:
           [ "$(jq -r .status <<<"$PARSED")" = ok ] || abort "$(jq -r .reason <<<"$PARSED")"
           COUNT=$(jq '.packages | length' <<<"$PARSED")
 
-          if [ "$AUTO_STATE" = pending ]; then
+          if [ "$AUTO_MERGE" = true ] && [ "$AUTO_STATE" = pending ]; then
             [ "$COUNT" -eq 1 ] || refuse "Merge automatique réservé à un seul paquet."
             [ -n "$(jq -r '.packages[0].patched_in' <<<"$PARSED")" ] || refuse "Version corrigée inconnue."
           fi
@@ -185,7 +188,7 @@ jobs:
 
             RESOLVED=$($CLI resolve composer.lock "$TYPE" "$SLUG")
             if [ "$(jq -r .status <<<"$RESOLVED")" != ok ]; then
-              record skipped "$(jq -r .reason <<<"$RESOLVED")"; refuse "Paquet hors Composer."; continue
+              record skipped "$(jq -r .reason <<<"$RESOLVED")"; refuse_fix "Paquet hors Composer."; continue
             fi
             PACKAGE=$(jq -r .package <<<"$RESOLVED")
             FROM=$(jq -r .installed <<<"$RESOLVED")
@@ -194,14 +197,18 @@ jobs:
               record failed "Impossible de lister les versions de $PACKAGE (identifiants Composer ?)."; refuse "Versions illisibles."; continue
             fi
 
-            if [ "$AUTO_STATE" = pending ]; then
+            if [ "$AUTO_MERGE" = true ] && [ "$AUTO_STATE" = pending ]; then
               TO=$($CLI pick-fix "$RUNNER_TEMP/versions.json" "$FROM" "$PATCHED_IN")
               [ -n "$TO" ] || refuse "La plus petite version corrigée change de version mineure : relecture humaine."
             fi
             if [ -z "$TO" ]; then
               PICK=$($CLI pick "$RUNNER_TEMP/versions.json" "$FROM" "$PATCHED_IN" "$TYPE")
-              if [ "$(jq -r .status <<<"$PICK")" != ok ]; then
-                record "$(jq -r .status <<<"$PICK")" "$(jq -r .reason <<<"$PICK")"; refuse "$(jq -r .reason <<<"$PICK")"; continue
+              STATUS=$(jq -r .status <<<"$PICK")
+              if [ "$STATUS" != ok ]; then
+                REASON=$(jq -r .reason <<<"$PICK")
+                record "$STATUS" "$REASON"
+                if [ "$STATUS" = failed ]; then refuse "$REASON"; else refuse_fix "$REASON"; fi
+                continue
               fi
               TO=$(jq -r .target <<<"$PICK")
               MAJOR_JUMP=$(jq -r .major_jump <<<"$PICK")
@@ -226,6 +233,7 @@ jobs:
             $CLI commit-message > "$RUNNER_TEMP/commit-message.txt"
             git commit --quiet -F "$RUNNER_TEMP/commit-message.txt" -- composer.json composer.lock
             record updated ""
+            if [ "$MAJOR_JUMP" = true ]; then refuse "Mise à jour majeure : relecture humaine."; fi
           done
 
           if [ "$(git rev-list --count "origin/${PRODUCTION_BRANCH}..HEAD")" -eq 0 ]; then
@@ -322,6 +330,9 @@ jobs:
             fi
           fi
 
+          if [ "$AUTO_STATE" = refused ]; then
+            gh pr comment "$PR_URL" --body "Merge automatique refusé : $AUTO_REASON" || true
+          fi
           finish pr_opened "" "$PR_URL"
 
       - name: Report result

@@ -26,7 +26,7 @@ echo match ($command) {
     'hours' => WordPressUpdate::withinBusinessHours(new DateTimeImmutable('now')) ? 'true' : 'false',
     'commit-message' => WordPressUpdate::commitMessage($context()),
     'pr-title' => WordPressUpdate::prTitleMany($readJson($args[0])),
-    'pr-body' => WordPressUpdate::prBodyMany($readJson($args[0]), WordPressUpdate::advisories((string) getenv('ADVISORIES'), '999999'), $args[1], ($args[2] ?? '') === 'true'),
+    'pr-body' => WordPressUpdate::prBodyMany($readJson($args[0]), WordPressUpdate::advisories((string) getenv('ADVISORIES'), '999999'), $args[1], $args[2] ?? ''),
     'result' => WordPressUpdate::result($args[0], $args[1] ?? '', $args[2] ?? '', is_file($args[3] ?? '') ? $readJson($args[3]) : [], $args[4] ?? 'not_requested', $args[5] ?? ''),
     'translation-locales' => implode(' ', WordPressUpdate::translationLocales(is_dir($args[0] ?? '') ? scandir($args[0]) : [])),
     'translation-url' => (string) WordPressUpdate::translationUrl($args[0] ?? '', $args[1] ?? '', $args[2] ?? ''),

@@ -301,17 +301,20 @@ check('prTitleMany names the count and flags a major',
 check('prTitleMany with a single update is its commit subject',
     WordPressUpdate::prTitleMany([$many[1]]),
     'chore(deps): upgrade Redirection from 5.5.2 to 5.6.0');
-$bodyMany = WordPressUpdate::prBodyMany($many, [], '42', false);
+$bodyMany = WordPressUpdate::prBodyMany($many, [], '42', '');
 check('prBodyMany lists every package with its status', str_contains($bodyMany, '| Gravity Forms | 2.9.1 | — | échec : composer require a échoué |'), true);
-check('prBodyMany neutralises pipes in reasons', str_contains(WordPressUpdate::prBodyMany([['reason' => 'a | b', 'status' => 'failed', 'to' => ''] + $many[2]], [], '42', false), 'a / b'), true);
+check('prBodyMany neutralises pipes in reasons', str_contains(WordPressUpdate::prBodyMany([['reason' => 'a | b', 'status' => 'failed', 'to' => ''] + $many[2]], [], '42', ''), 'a / b'), true);
 check('prBodyMany reminds that merging deploys', str_contains($bodyMany, 'Merger cette PR déploie en production.'), true);
 check('prBodyMany names the Kryzawatch item', str_contains($bodyMany, 'Ouverte par Kryzawatch (item #42).'), true);
-check('prBodyMany announces an automatic merge', str_contains(WordPressUpdate::prBodyMany([$many[1]], [], '42', true), 'Merge automatique demandé'), true);
-$bodyAdvisories = WordPressUpdate::prBodyMany([$many[1]], $fixed, '42', false);
+check('prBodyMany announces an automatic merge', str_contains(WordPressUpdate::prBodyMany([$many[1]], [], '42', 'true'), 'Merge automatique demandé'), true);
+check('prBodyMany names the critical-fix mode', str_contains(WordPressUpdate::prBodyMany([$many[1]], [], '42', 'true'), 'Merge automatique demandé (faille critique)'), true);
+check('prBodyMany names the routine mode', str_contains(WordPressUpdate::prBodyMany([$many[1]], [], '42', 'routine'), 'Merge automatique demandé (mise à jour courante)'), true);
+check('prBodyMany says nothing of a merge when none is asked', str_contains(WordPressUpdate::prBodyMany([$many[1]], [], '42', ''), 'Merge automatique'), false);
+$bodyAdvisories = WordPressUpdate::prBodyMany([$many[1]], $fixed, '42', '');
 check('prBodyMany announces the number of fixed advisories', str_contains($bodyAdvisories, '### Failles corrigées (3)'), true);
 check('prBodyMany links an advisory', str_contains($bodyAdvisories, '[Avis](https://www.wordfence.com/a?x=1&y=2)'), true);
 check('prBodyMany links the wordpress.org changelog', str_contains($bodyMany, 'https://wordpress.org/plugins/redirection/#developers'), true);
-check('prBodyMany links the wordpress.org changelog of a WP Packages plugin', str_contains(WordPressUpdate::prBodyMany([['package' => 'wp-plugin/redirection'] + $many[1], $many[0]], [], '42', false), 'https://wordpress.org/plugins/redirection/#developers'), true);
+check('prBodyMany links the wordpress.org changelog of a WP Packages plugin', str_contains(WordPressUpdate::prBodyMany([['package' => 'wp-plugin/redirection'] + $many[1], $many[0]], [], '42', ''), 'https://wordpress.org/plugins/redirection/#developers'), true);
 
 // untrusted input edge cases
 check('packages rejects a slug with a trailing newline',
@@ -357,5 +360,11 @@ check('translationPacks keeps the installed locales with a wordpress.org package
 check('translationPacks survives a malformed answer',
     [WordPressUpdate::translationPacks([], ['fr_FR']), WordPressUpdate::translationPacks(['translations' => [['language' => ['x']], 'y']], ['fr_FR'])],
     [[], []]);
+
+// The dispatch inputs are validated in bash: the regex is read from the workflow so this test follows it. /D matches bash's end of string.
+preg_match('/\[\[ "\$AUTO_MERGE" =~ (\S+) \]\]/', (string) file_get_contents(__DIR__.'/../../../workflows/update-wordpress.yml'), $autoMergeRule);
+$autoMergeAccepts = fn (string $value): int => preg_match('/'.($autoMergeRule[1] ?? 'rule-not-found').'/D', $value);
+check('auto_merge accepts empty, true and routine', array_map($autoMergeAccepts, ['', 'true', 'routine']), [1, 1, 1]);
+check('auto_merge refuses any other value', array_map($autoMergeAccepts, ['false', 'TRUE', 'routine ', "true\n", 'routinex', 'truer']), [0, 0, 0, 0, 0, 0]);
 
 exit($failures > 0 ? 1 : 0);
