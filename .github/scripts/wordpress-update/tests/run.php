@@ -268,6 +268,16 @@ check('smoke test off when one of two production jobs skips it',
     ]), false);
 check('smoke test off without a production job',
     WordPressUpdate::smokeTestEnabled(['staging' => $prod(['environment' => 'staging', 'smoke_test' => true, 'site_url' => 'https://x.ca'])]), false);
+$both = "\${{ github.ref_name == 'dev' && 'staging' || 'production' }}";
+$bothUrl = "\${{ github.ref_name == 'dev' && 'https://s.x.ca' || 'https://x.ca' }}";
+check('smoke test on with one job deploying both environments from an expression',
+    WordPressUpdate::smokeTestEnabled(['wordpress-build' => $prod(['environment' => $both, 'smoke_test' => true, 'site_url' => $bothUrl])]), true);
+check('smoke test off on an expression job without smoke_test',
+    WordPressUpdate::smokeTestEnabled(['wordpress-build' => $prod(['environment' => $both, 'smoke_test' => false, 'site_url' => $bothUrl])]), false);
+check('smoke test off on an expression job without site_url',
+    WordPressUpdate::smokeTestEnabled(['wordpress-build' => $prod(['environment' => $both, 'smoke_test' => true])]), false);
+check('an expression that only mentions staging is not a production job',
+    WordPressUpdate::smokeTestEnabled(['wordpress-build' => $prod(['environment' => "\${{ github.ref_name == 'dev' && 'staging' || 'qa' }}", 'smoke_test' => true, 'site_url' => 'https://x.ca'])]), false);
 check('smoke test off on an empty or malformed jobs map',
     [WordPressUpdate::smokeTestEnabled([]), WordPressUpdate::smokeTestEnabled(['x' => 'y'])], [false, false]);
 

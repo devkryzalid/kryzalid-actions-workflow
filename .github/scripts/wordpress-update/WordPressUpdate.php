@@ -311,7 +311,12 @@ final class WordPressUpdate
     /** @param array $jobs the `jobs` map of the caller's build.yml: every production deployment must run the smoke test. */
     public static function smokeTestEnabled(array $jobs): bool
     {
-        $production = array_filter($jobs, fn (mixed $job): bool => is_array($job) && ($job['with']['environment'] ?? null) === 'production');
+        // A single job can deploy both environments through an `environment` expression.
+        $production = array_filter($jobs, function (mixed $job): bool {
+            $environment = is_array($job) ? ($job['with']['environment'] ?? null) : null;
+
+            return $environment === 'production' || (is_string($environment) && str_starts_with($environment, '${{') && str_contains($environment, "'production'"));
+        });
 
         foreach ($production as $job) {
             $smoke = $job['with']['smoke_test'] ?? null;
