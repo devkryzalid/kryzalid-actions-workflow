@@ -39,7 +39,7 @@ final class WordPressUpdate
         return ['status' => 'skipped', 'reason' => "{$slug} n'est pas géré par Composer dans ce repo : mise à jour manuelle."];
     }
 
-    public static function pick(array $versions, string $installed, string $patchedIn): array
+    public static function pick(array $versions, string $installed, string $patchedIn, string $type): array
     {
         if ($patchedIn !== '' && version_compare($installed, $patchedIn, '>=')) {
             return ['status' => 'skipped', 'reason' => "Déjà en {$installed} dans le repo (corrigé en {$patchedIn}) : correctif pas encore déployé ?"];
@@ -53,7 +53,7 @@ final class WordPressUpdate
                 return ['status' => 'skipped', 'reason' => "Déjà à jour ({$installed})."];
             }
 
-            return ['status' => 'ok', 'target' => $target, 'major_jump' => self::major($target) !== self::major($installed)];
+            return ['status' => 'ok', 'target' => $target, 'major_jump' => self::major($target, $type) !== self::major($installed, $type)];
         }
 
         if ($target === null || version_compare($target, $patchedIn, '<')) {
@@ -62,7 +62,7 @@ final class WordPressUpdate
             return ['status' => 'failed', 'reason' => "Aucune version publiée ne corrige la faille (dernière : {$latest}, corrigée en {$patchedIn})."];
         }
 
-        return ['status' => 'ok', 'target' => $target, 'major_jump' => self::major($target) !== self::major($installed)];
+        return ['status' => 'ok', 'target' => $target, 'major_jump' => self::major($target, $type) !== self::major($installed, $type)];
     }
 
     /** Smallest published fix that keeps the installed major.minor, or null: only such a jump is merged without review. */
@@ -112,9 +112,10 @@ final class WordPressUpdate
         return ltrim(trim($version), 'vV');
     }
 
-    private static function major(string $version): string
+    /** Same rule as Kryzawatch's UpdateCatalog::isMajor(): WordPress ships a major on every x.y change. */
+    private static function major(string $version, string $type): string
     {
-        return explode('.', $version)[0];
+        return $type === 'core' ? self::minor($version) : explode('.', $version)[0];
     }
 
     /** Advisories of the input fixed by $target; the input comes from outside, so invalid fields are dropped. */
@@ -200,8 +201,8 @@ final class WordPressUpdate
             $message = self::fit($data);
         }
 
-        // GitHub masks each line of a multi-line secret, so a pretty-printed COMPOSER_AUTH turns every { and } of raw JSON into ***.
-        return '::notice title=kryzawatch-update::'.base64_encode($message);
+        // The runner masks each line of a multi-line secret, raw and in base64: a pretty-printed COMPOSER_AUTH hid the braces of raw JSON, then a trailing fQ==.
+        return '::notice title=kryzawatch-update::'.bin2hex($message);
     }
 
     /** The runner cuts annotation messages at 4096 characters, which would leave Kryzawatch an undecodable JSON. */
@@ -222,7 +223,7 @@ final class WordPressUpdate
 
         $total = count($packages);
         $data['packages'] = $packages;
-        $fits = fn (array $data): bool => strlen(base64_encode(json_encode($data, self::JSON_FLAGS))) <= self::ANNOTATION_BUDGET;
+        $fits = fn (array $data): bool => strlen(bin2hex(json_encode($data, self::JSON_FLAGS))) <= self::ANNOTATION_BUDGET;
 
         if ($fits($data)) {
             return json_encode($data, self::JSON_FLAGS);
@@ -310,7 +311,12 @@ final class WordPressUpdate
     /** @param array $jobs the `jobs` map of the caller's build.yml: every production deployment must run the smoke test. */
     public static function smokeTestEnabled(array $jobs): bool
     {
-        $production = array_filter($jobs, fn (mixed $job): bool => is_array($job) && ($job['with']['environment'] ?? null) === 'production');
+        // A single job can deploy both environments through an `environment` expression.
+        $production = array_filter($jobs, function (mixed $job): bool {
+            $environment = is_array($job) ? ($job['with']['environment'] ?? null) : null;
+
+            return $environment === 'production' || (is_string($environment) && str_starts_with($environment, '${{') && str_contains($environment, "'production'"));
+        });
 
         foreach ($production as $job) {
             $smoke = $job['with']['smoke_test'] ?? null;
@@ -344,7 +350,7 @@ final class WordPressUpdate
         return ($major ? '[major] ' : '').'chore(deps): WordPress updates ('.count($updated).' packages)';
     }
 
-    public static function prBodyMany(array $packages, array $advisories, string $itemId, bool $autoMergeRequested): string
+    public static function prBodyMany(array $packages, array $advisories, string $itemId, string $autoMerge): string
     {
         $status = fn (array $package): string => match ($package['status']) {
             'updated' => $package['major_jump'] ? 'mis à jour **[major]**' : 'mis à jour',
@@ -385,8 +391,14 @@ final class WordPressUpdate
 
         $lines[] = '';
 
-        if ($autoMergeRequested) {
-            $lines[] = '> Merge automatique demandé (faille critique) : le résultat est indiqué dans Kryzawatch.';
+        $mode = match ($autoMerge) {
+            'true' => 'faille critique',
+            'routine' => 'mise à jour courante',
+            default => null,
+        };
+
+        if ($mode !== null) {
+            $lines[] = "> Merge automatique demandé ({$mode}) : le résultat est indiqué dans Kryzawatch.";
             $lines[] = '';
         }
 

@@ -74,7 +74,7 @@ concurrency:
 jobs:
   # A single job: GitHub bills each job rounded up to the minute
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Vérification des secrets requis
