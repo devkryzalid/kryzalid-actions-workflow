@@ -49,22 +49,22 @@ check('resolve skips a component outside Composer (Divi)',
 // pick
 $versions = ['dev-trunk', '4.0.0', '3.5.12', '3.5.8', '3.4.8', '4.1.0-beta1', 'v3.5.9'];
 check('pick targets the latest stable even across a major',
-    WordPressUpdate::pick($versions, '3.4.8', '3.5.8'),
+    WordPressUpdate::pick($versions, '3.4.8', '3.5.8', 'plugin'),
     ['status' => 'ok', 'target' => '4.0.0', 'major_jump' => true]);
 check('pick within the same major',
-    WordPressUpdate::pick(['3.5.12', '3.5.8', 'dev-trunk'], '3.4.8', '3.5.8'),
+    WordPressUpdate::pick(['3.5.12', '3.5.8', 'dev-trunk'], '3.4.8', '3.5.8', 'plugin'),
     ['status' => 'ok', 'target' => '3.5.12', 'major_jump' => false]);
 check('pick handles 2 and 4 segment versions',
-    WordPressUpdate::pick(['7.1', '7.0.6', '2.4.14.1'], '7.0.5', '7.0.6'),
+    WordPressUpdate::pick(['7.1', '7.0.6', '2.4.14.1'], '7.0.5', '7.0.6', 'plugin'),
     ['status' => 'ok', 'target' => '7.1', 'major_jump' => false]);
 check('pick skips when the repo already carries the fix',
-    WordPressUpdate::pick($versions, '3.5.8', '3.5.8'),
+    WordPressUpdate::pick($versions, '3.5.8', '3.5.8', 'plugin'),
     ['status' => 'skipped', 'reason' => 'Déjà en 3.5.8 dans le repo (corrigé en 3.5.8) : correctif pas encore déployé ?']);
 check('pick fails when no published version carries the fix',
-    WordPressUpdate::pick(['3.5.7', '3.5.6'], '3.4.8', '3.5.8'),
+    WordPressUpdate::pick(['3.5.7', '3.5.6'], '3.4.8', '3.5.8', 'plugin'),
     ['status' => 'failed', 'reason' => 'Aucune version publiée ne corrige la faille (dernière : 3.5.7, corrigée en 3.5.8).']);
 check('pick fails on an empty list',
-    WordPressUpdate::pick([], '3.4.8', '3.5.8')['status'],
+    WordPressUpdate::pick([], '3.4.8', '3.5.8', 'plugin')['status'],
     'failed');
 
 // cleanTitle
@@ -208,11 +208,25 @@ check('packages rejects an empty title',
 
 // pick in routine mode (no patched_in)
 check('pick without patched_in targets the latest stable above the installed one',
-    WordPressUpdate::pick(['3.5.12', '3.4.8', 'dev-trunk'], '3.4.8', ''),
+    WordPressUpdate::pick(['3.5.12', '3.4.8', 'dev-trunk'], '3.4.8', '', 'plugin'),
     ['status' => 'ok', 'target' => '3.5.12', 'major_jump' => false]);
 check('pick without patched_in skips an up-to-date package',
-    WordPressUpdate::pick(['3.5.12', '3.4.8'], '3.5.12', ''),
+    WordPressUpdate::pick(['3.5.12', '3.4.8'], '3.5.12', '', 'plugin'),
     ['status' => 'skipped', 'reason' => 'Déjà à jour (3.5.12).']);
+
+// Same major rule as Kryzawatch's UpdateCatalog::isMajor(): x.y for the core, the first segment otherwise.
+check('pick flags a core x.y change as major',
+    WordPressUpdate::pick(['7.2.0', '7.1.3'], '7.1.3', '', 'core'),
+    ['status' => 'ok', 'target' => '7.2.0', 'major_jump' => true]);
+check('pick keeps a core maintenance release non major',
+    WordPressUpdate::pick(['7.1.4', '7.1.3'], '7.1.3', '', 'core'),
+    ['status' => 'ok', 'target' => '7.1.4', 'major_jump' => false]);
+check('pick keeps a plugin minor release non major',
+    WordPressUpdate::pick(['28.6', '28.5'], '28.5', '', 'plugin'),
+    ['status' => 'ok', 'target' => '28.6', 'major_jump' => false]);
+check('pick flags a plugin first-segment change as major',
+    WordPressUpdate::pick(['5.0', '4.9'], '4.9', '', 'plugin'),
+    ['status' => 'ok', 'target' => '5.0', 'major_jump' => true]);
 
 // pickFix
 check('pickFix takes the smallest fixed version of the same minor',

@@ -39,7 +39,7 @@ final class WordPressUpdate
         return ['status' => 'skipped', 'reason' => "{$slug} n'est pas géré par Composer dans ce repo : mise à jour manuelle."];
     }
 
-    public static function pick(array $versions, string $installed, string $patchedIn): array
+    public static function pick(array $versions, string $installed, string $patchedIn, string $type): array
     {
         if ($patchedIn !== '' && version_compare($installed, $patchedIn, '>=')) {
             return ['status' => 'skipped', 'reason' => "Déjà en {$installed} dans le repo (corrigé en {$patchedIn}) : correctif pas encore déployé ?"];
@@ -53,7 +53,7 @@ final class WordPressUpdate
                 return ['status' => 'skipped', 'reason' => "Déjà à jour ({$installed})."];
             }
 
-            return ['status' => 'ok', 'target' => $target, 'major_jump' => self::major($target) !== self::major($installed)];
+            return ['status' => 'ok', 'target' => $target, 'major_jump' => self::major($target, $type) !== self::major($installed, $type)];
         }
 
         if ($target === null || version_compare($target, $patchedIn, '<')) {
@@ -62,7 +62,7 @@ final class WordPressUpdate
             return ['status' => 'failed', 'reason' => "Aucune version publiée ne corrige la faille (dernière : {$latest}, corrigée en {$patchedIn})."];
         }
 
-        return ['status' => 'ok', 'target' => $target, 'major_jump' => self::major($target) !== self::major($installed)];
+        return ['status' => 'ok', 'target' => $target, 'major_jump' => self::major($target, $type) !== self::major($installed, $type)];
     }
 
     /** Smallest published fix that keeps the installed major.minor, or null: only such a jump is merged without review. */
@@ -112,9 +112,10 @@ final class WordPressUpdate
         return ltrim(trim($version), 'vV');
     }
 
-    private static function major(string $version): string
+    /** Same rule as Kryzawatch's UpdateCatalog::isMajor(): WordPress ships a major on every x.y change. */
+    private static function major(string $version, string $type): string
     {
-        return explode('.', $version)[0];
+        return $type === 'core' ? self::minor($version) : explode('.', $version)[0];
     }
 
     /** Advisories of the input fixed by $target; the input comes from outside, so invalid fields are dropped. */

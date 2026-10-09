@@ -20,7 +20,7 @@ $context = fn (): array => [
 echo match ($command) {
     'packages' => $json(WordPressUpdate::packages($args[0] ?? '')),
     'resolve' => $json(WordPressUpdate::resolve($readJson($args[0]), $args[1], $args[2])),
-    'pick' => $json(WordPressUpdate::pick($readJson($args[0])['versions'] ?? [], $args[1], $args[2])),
+    'pick' => $json(WordPressUpdate::pick($readJson($args[0])['versions'] ?? [], $args[1], $args[2], $args[3] ?? throw new InvalidArgumentException('pick needs the package type'))),
     'pick-fix' => (string) WordPressUpdate::pickFix($readJson($args[0])['versions'] ?? [], $args[1], $args[2]),
     'smoke' => WordPressUpdate::smokeTestEnabled((array) json_decode(is_file($args[0] ?? '') ? (string) file_get_contents($args[0]) : '', true)) ? 'true' : 'false',
     'hours' => WordPressUpdate::withinBusinessHours(new DateTimeImmutable('now')) ? 'true' : 'false',
