@@ -44,7 +44,7 @@ jobs:
   update:
     # Default branch only: a dispatch on another branch would run an unreviewed caller.
     if: github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Under Kryzawatch's 60 min: past that, it fails the item while the run could still open a PR.
     timeout-minutes: 45
     env:
@@ -339,7 +339,7 @@ jobs:
       && github.event.action == 'closed'
       && startsWith(github.event.pull_request.head.ref, 'kryzawatch/update-')
       && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PRODUCTION_BRANCH: ${{ inputs.production_branch }}
       DEV_BRANCH: ${{ inputs.dev_branch }}
