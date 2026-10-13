@@ -251,6 +251,9 @@ jobs:
 
           if [ "$(git rev-list --count "origin/${PRODUCTION_BRANCH}..HEAD")" -eq 0 ]; then
             refuse "Aucune mise à jour appliquée."
+            # A registry outage fails every package: that is not "nothing to update", and only a failed item can be relaunched.
+            FAILED=$(jq '[.[] | select(.status == "failed")] | length' "$DONE")
+            [ "$FAILED" -eq 0 ] || finish failed "Aucun paquet mis à jour : $FAILED en échec, voir le détail par paquet." ""
             finish skipped "Rien à mettre à jour." ""
           fi
 
