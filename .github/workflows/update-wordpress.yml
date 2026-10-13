@@ -225,7 +225,14 @@ jobs:
               MAJOR_JUMP=$(jq -r .major_jump <<<"$PICK")
             fi
 
-            if ! OUT=$(composer require "${PACKAGE}:${TO}" --update-with-dependencies --no-interaction 2>&1); then
+            REQUIRED=0
+            for attempt in 1 2 3; do
+              if OUT=$(composer require "${PACKAGE}:${TO}" --update-with-dependencies --no-interaction 2>&1); then REQUIRED=1; break; fi
+              # A registry rate limit is transient: ACF answered 429 to a burst of runs on 2026-10-13.
+              grep -q 'HTTP/[0-9.]* 429' <<<"$OUT" && [ "$attempt" -lt 3 ] || break
+              sleep $((attempt * 30))
+            done
+            if [ "$REQUIRED" -eq 0 ]; then
               print_untrusted "$OUT"; revert; record failed "composer require a échoué : $(tail -n 5 <<<"$OUT")"; refuse "composer require a échoué."; continue
             fi
             if ! composer validate --no-check-publish --no-interaction; then
