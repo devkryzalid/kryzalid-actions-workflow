@@ -447,14 +447,22 @@ jobs:
           fi
 
           FAILED=""
+          headers="$(mktemp)"
           for path in $SMOKE_PATHS; do
             reason=""
+            blocked=""
             for attempt in 1 2 3; do
               # Cache-busting parameter: a page cache would otherwise answer for a broken PHP stack.
-              body="$(curl -sL -A 'kryzalid-deploy-check' --max-time 20 -w '\n%{http_code}' "${SITE_URL%/}${path}?kryzalid_smoke=${GITHUB_RUN_ID:-local}-${attempt}" || printf '\n000')"
+              body="$(curl -sL -D "$headers" -A 'kryzalid-deploy-check' --max-time 20 -w '\n%{http_code}' "${SITE_URL%/}${path}?kryzalid_smoke=${GITHUB_RUN_ID:-local}-${attempt}" || printf '\n000')"
               status="${body##*$'\n'}"
               if [ "$status" = "200" ] && ! grep -qiE 'critical error|erreur critique|Fatal error' <<<"$body"; then
                 reason=""
+                break
+              fi
+              # Cloudflare challenges or blocks GitHub runner IPs: the request never reaches the server, so the site is unverified, not broken.
+              if [ "$status" = "403" ] && { grep -qi '^cf-mitigated:' "$headers" || grep -q 'cf-error-details' <<<"$body"; }; then
+                reason=""
+                blocked="1"
                 break
               fi
               [ "$status" = "200" ] && reason="erreur fatale dans la page" || reason="HTTP $status"
@@ -464,6 +472,8 @@ jobs:
             if [ -n "$reason" ]; then
               echo "❌ $path : $reason"
               FAILED="$FAILED $path"
+            elif [ -n "$blocked" ]; then
+              echo "::warning title=Smoke test non vérifiable::$path : requête bloquée par Cloudflare (403), le site n'a pas pu être vérifié."
             else
               echo "✅ $path"
             fi
