@@ -239,7 +239,8 @@ jobs:
               revert; record failed "composer validate a échoué."; refuse "composer validate a échoué."; continue
             fi
             DIR=$(composer show "$PACKAGE" --path | awk '{print $2}')
-            if ! LINT=$(find "$DIR" -name '*.php' -print0 | xargs -0 -n 1 -P 8 php -l 2>&1); then
+            # Vendored examples are never loaded and can target a newer PHP than the plugin (Kadence Security 10.0.6 on PHP 7.4).
+            if ! LINT=$(find "$DIR" -name '*.php' -not -path '*/vendor*/*/examples/*' -print0 | xargs -0 -n 1 -P 8 php -l 2>&1); then
               ERRORS=$(grep -v '^No syntax errors' <<<"$LINT" || true)
               print_untrusted "$ERRORS"; revert; record failed "php -l a échoué : $(head -n 3 <<<"$ERRORS")"; refuse "php -l a échoué."; continue
             fi

@@ -148,7 +148,17 @@ jobs:
           SSH_PORT: ${{ inputs.environment == 'staging' && (secrets.SSH_PORT_STAGING || '22') || (secrets.SSH_PORT_PROD || '22') }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          # A burst of deployments can leave the server silent for a moment: no key means nothing to connect to yet.
+          for attempt in 1 2 3; do
+            KEYS="$(ssh-keyscan -p "${SSH_PORT:-22}" -H "$SERVER_HOST" 2>/dev/null || true)"
+            if [ -n "$KEYS" ]; then
+              echo "$KEYS" >> ~/.ssh/known_hosts
+              exit 0
+            fi
+            [ "$attempt" -lt 3 ] && sleep "${KEYSCAN_RETRY_DELAY:-10}"
+          done
+          echo "❌ ssh-keyscan : le serveur n'a renvoyé aucune clé après 3 essais."
+          exit 1
 
       - name: Déploiement et build
         shell: bash
