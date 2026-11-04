@@ -148,16 +148,16 @@ jobs:
           SSH_PORT: ${{ inputs.environment == 'staging' && (secrets.SSH_PORT_STAGING || '22') || (secrets.SSH_PORT_PROD || '22') }}
         run: |
           mkdir -p ~/.ssh
-          # A burst of deployments can leave the server silent for a moment: no key means nothing to connect to yet.
-          for attempt in 1 2 3; do
-            KEYS="$(ssh-keyscan -p "${SSH_PORT:-22}" -H "$SERVER_HOST" 2>/dev/null || true)"
+          # A burst of deployments can leave the server silent for a while: no key means nothing to connect to yet.
+          for attempt in 1 2 3 4 5; do
+            KEYS="$(ssh-keyscan -T 15 -p "${SSH_PORT:-22}" -H "$SERVER_HOST" 2>/dev/null || true)"
             if [ -n "$KEYS" ]; then
               echo "$KEYS" >> ~/.ssh/known_hosts
               exit 0
             fi
-            [ "$attempt" -lt 3 ] && sleep "${KEYSCAN_RETRY_DELAY:-10}"
+            [ "$attempt" -lt 5 ] && sleep "${KEYSCAN_RETRY_DELAY:-20}"
           done
-          echo "❌ ssh-keyscan : le serveur n'a renvoyé aucune clé après 3 essais."
+          echo "❌ ssh-keyscan : le serveur n'a renvoyé aucune clé après 5 essais."
           exit 1
 
       - name: Déploiement et build
@@ -481,6 +481,8 @@ jobs:
 
             if [ -n "$reason" ]; then
               echo "❌ $path : $reason"
+              # Tells a WordPress maintenance page from a proxy or PHP-FPM error next time this fires.
+              grep -iE '^(server|retry-after|cf-ray|x-varnish):' "$headers" | sed 's/^/   /' || true
               FAILED="$FAILED $path"
             elif [ -n "$blocked" ]; then
               echo "::warning title=Smoke test non vérifiable::$path : requête bloquée par Cloudflare (403), le site n'a pas pu être vérifié."

@@ -162,7 +162,17 @@ jobs:
           SERVER_HOST: ${{ inputs.environment == 'staging' && secrets.SERVER_HOST_STAGING || secrets.SERVER_HOST_PROD }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          # A burst of deployments can leave the server silent for a while: no key means nothing to connect to yet.
+          for attempt in 1 2 3 4 5; do
+            KEYS="$(ssh-keyscan -T 15 -H "$SERVER_HOST" 2>/dev/null || true)"
+            if [ -n "$KEYS" ]; then
+              echo "$KEYS" >> ~/.ssh/known_hosts
+              exit 0
+            fi
+            [ "$attempt" -lt 5 ] && sleep "${KEYSCAN_RETRY_DELAY:-20}"
+          done
+          echo "❌ ssh-keyscan : le serveur n'a renvoyé aucune clé après 5 essais."
+          exit 1
 
       - name: Build du projet (sur le serveur cible)
         shell: bash
