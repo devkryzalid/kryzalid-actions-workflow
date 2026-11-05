@@ -39,6 +39,8 @@ on:
       # Secrets communs
       SLACK_WEBHOOK_URL:
         required: true
+      CLEARCACHE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -286,6 +288,36 @@ jobs:
             echo "🧹 Anciennes releases purgées (gardé $KEEP)"
           fi
           BASH
+
+      - name: Vidage du cache de production
+        if: inputs.environment == 'production'
+        continue-on-error: true
+        shell: bash
+        env:
+          CLEARCACHE_KEY: ${{ secrets.CLEARCACHE_KEY }}
+          PROJECT_PATH: ${{ secrets.PROJECT_PATH_PROD }}
+        run: |
+          if [ -z "$CLEARCACHE_KEY" ]; then
+            echo "::warning::Secret CLEARCACHE_KEY absent : cache de production non vidé."
+            exit 0
+          fi
+          DOMAIN="$(printf '%s' "$PROJECT_PATH" | sed -nE 's#^/var/www/html/([^/]+)/public_html/?$#\1#p')"
+          if [ -z "$DOMAIN" ]; then
+            echo "::warning::Domaine introuvable dans PROJECT_PATH_PROD : cache de production non vidé."
+            exit 0
+          fi
+          # Resolve the canonical host first: some sites redirect to plain http, which would expose the key.
+          EFFECTIVE_URL="$(curl -sSL --max-time 30 -o /dev/null -w '%{url_effective}' "https://$DOMAIN/" || true)"
+          HOST="$(printf '%s' "$EFFECTIVE_URL" | sed -E 's#^https?://([^/]+).*#\1#')"
+          if [ -z "$HOST" ]; then
+            echo "::warning::$DOMAIN ne répond pas : cache de production non vidé."
+            exit 0
+          fi
+          if curl -sS -f --max-time 60 --retry 2 -o /dev/null "https://$HOST/clearcache?key=$CLEARCACHE_KEY"; then
+            echo "Cache de production vidé sur $HOST"
+          else
+            echo "::warning::Échec du vidage du cache sur $HOST."
+          fi
 
       - name: Préparer les variables du message
         if: always()
