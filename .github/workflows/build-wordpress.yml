@@ -448,6 +448,9 @@ jobs:
         env:
           SITE_URL: ${{ inputs.site_url }}
           SMOKE_PATHS: ${{ inputs.smoke_test_paths }}
+          SSH_USER: ${{ secrets.SSH_USER_PROD }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST_PROD }}
+          SSH_PORT: ${{ secrets.SSH_PORT_PROD || '22' }}
         run: |
           set -euo pipefail
 
@@ -457,6 +460,7 @@ jobs:
           fi
 
           FAILED=""
+          FATAL_PATTERN='critical error|erreur critique|Fatal error'
           headers="$(mktemp)"
           for path in $SMOKE_PATHS; do
             reason=""
@@ -465,11 +469,11 @@ jobs:
               # Cache-busting parameter: a page cache would otherwise answer for a broken PHP stack.
               body="$(curl -sL -D "$headers" -A 'kryzalid-deploy-check' --max-time 20 -w '\n%{http_code}' "${SITE_URL%/}${path}?kryzalid_smoke=${GITHUB_RUN_ID:-local}-${attempt}" || printf '\n000')"
               status="${body##*$'\n'}"
-              if [ "$status" = "200" ] && ! grep -qiE 'critical error|erreur critique|Fatal error' <<<"$body"; then
+              if [ "$status" = "200" ] && ! grep -qiE "$FATAL_PATTERN" <<<"$body"; then
                 reason=""
                 break
               fi
-              # Cloudflare challenges or blocks GitHub runner IPs: the request never reaches the server, so the site is unverified, not broken.
+              # Cloudflare challenges or blocks GitHub runner IPs: the request never reaches the server, so the runner cannot tell.
               if [ "$status" = "403" ] && { grep -qi '^cf-mitigated:' "$headers" || grep -q 'cf-error-details' <<<"$body"; }; then
                 reason=""
                 blocked="1"
@@ -479,10 +483,28 @@ jobs:
               [ "$attempt" -lt 3 ] && sleep "${SMOKE_RETRY_DELAY:-10}"
             done
 
-            if [ -n "$reason" ]; then
-              echo "❌ $path : $reason"
+            # Cloudflare or the server's own firewall can refuse the runner's IP (Varnish blocked.vcl answers 503 to Azure ranges): ask the server before calling the site broken.
+            runner_answer="${reason:-403 Cloudflare}"
+            server_ok=""
+            if [ -n "$reason" ] || [ -n "$blocked" ]; then
               # Tells a WordPress maintenance page from a proxy or PHP-FPM error next time this fires.
               grep -iE '^(server|retry-after|cf-ray|x-varnish):' "$headers" | sed 's/^/   /' || true
+              body="$(ssh -n -p "${SSH_PORT:-22}" -o BatchMode=yes -o ConnectTimeout=20 "$SSH_USER@$SERVER_HOST" \
+                curl -sL -A kryzalid-deploy-check --max-time 20 -w "'\n%{http_code}'" "$(printf '%q' "${SITE_URL%/}${path}?kryzalid_smoke=${GITHUB_RUN_ID:-local}-server")" || printf '\n000')"
+              status="${body##*$'\n'}"
+              if [ "$status" = "200" ] && ! grep -qiE "$FATAL_PATTERN" <<<"$body"; then
+                server_ok="1"
+              elif [ -n "$blocked" ] && [ "$status" = "200" ]; then
+                reason="erreur fatale dans la page"
+              elif [ -n "$blocked" ] && [ "$status" != "000" ] && [ "$status" != "403" ]; then
+                reason="HTTP $status depuis le serveur"
+              fi
+            fi
+
+            if [ -n "$server_ok" ]; then
+              echo "::warning title=Smoke test vérifié depuis le serveur::$path : 200 depuis le serveur, $runner_answer depuis le runner. L'accès depuis l'extérieur n'est pas confirmé."
+            elif [ -n "$reason" ]; then
+              echo "❌ $path : $reason"
               FAILED="$FAILED $path"
             elif [ -n "$blocked" ]; then
               echo "::warning title=Smoke test non vérifiable::$path : requête bloquée par Cloudflare (403), le site n'a pas pu être vérifié."
